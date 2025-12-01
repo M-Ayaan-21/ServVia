@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "corsheaders",
     "rest_framework",  # ensure DRF templates & browsable API work
+    "user_profile",
 ]
 
 MIDDLEWARE = [

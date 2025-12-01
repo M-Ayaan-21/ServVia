@@ -26,7 +26,6 @@ from database.database_config import db_conn
 from database.db_operations import update_record
 from database.models import User
 from django_core.config import Config
-# NOTE: we keep the import (in case other code paths use it), but the main flow bypasses intent gating.
 from intent_classification.intent import process_user_intent
 from language_service.asr import transcribe_and_translate
 from language_service.translation import (
@@ -41,8 +40,22 @@ logger = logging.getLogger(__name__)
 
 
 def authenticate_user_based_on_email(email_id):
+    """Authenticate user - bypass Farmstack auth when WITH_DB_CONFIG=False"""
     authenticated_user = None
     try:
+        if not Config.WITH_DB_CONFIG:
+            if email_id and '@' in email_id:
+                logger.info(f"Creating mock authenticated user for: {email_id}")
+                return {
+                    "email": email_id,
+                    "first_name": "User",
+                    "phone_number": None,
+                    "last_name": "",
+                    "access_token": "bypass-mode"
+                }
+            return None
+        
+        # Original Farmstack authentication
         authentication_url = f"{Config.CONTENT_DOMAIN_URL}{Config.CONTENT_AUTHENTICATE_ENDPOINT}"
         response = send_request(
             authentication_url,
@@ -108,11 +121,14 @@ def preprocess_user_data(
 
 def process_query(original_query, email_id, authenticated_user={}):
     """
-    Force every query through the RAG pipeline (no intent gating) so Servvia prompts are used.
+    Process query with user profile integration and RAG pipeline (no intent gating).
     """
     message_obj, chat_history = None, None
     (response_map, message_data_to_insert_or_update, message_data_update_post_rag_pipeline) = ({}, {}, {})
+    
     try:
+        logger.info(f"Processing query for {email_id}: {original_query}")
+        
         user_data, message_obj = preprocess_user_data(original_query, email_id, authenticated_user)
 
         user_id = user_data.get("user_id", None)
@@ -125,15 +141,40 @@ def process_query(original_query, email_id, authenticated_user={}):
         query_in_english, input_language_detected = asyncio.run(
             detect_language_and_translate_to_english(original_query)
         )
+        logger.info(f"Detected language: {input_language_detected}")
+        
         message_data_to_insert_or_update["translated_message"] = query_in_english
         message_data_to_insert_or_update["input_translation_end_time"] = datetime.datetime.now()
         message_data_to_insert_or_update["input_language_detected"] = input_language_detected
 
-        # BYPASS INTENT GATING
+        # BYPASS INTENT GATING - Always use RAG
         proceed_to_rag = True
         logger.info("Intent gating bypassed; executing RAG pipeline.")
 
         if proceed_to_rag:
+            # Load user profile for personalized responses
+            user_profile_data = None
+            if email_id:
+                try:
+                    from user_profile.models import UserProfile
+                    profile = UserProfile.objects.get(email=email_id)
+                    user_profile_data = {
+                        'allergies': profile.get_allergies_list(),
+                        'medical_conditions': profile.get_conditions_list(),
+                        'current_medications': profile.get_medications_list(),
+                        'first_name': profile.first_name,
+                    }
+                    if profile.first_name:
+                        user_name = profile.first_name
+                        
+                    logger.info(f"Loaded profile for {email_id}: {profile.first_name}")
+                    if user_profile_data.get('allergies'):
+                        logger.info(f"User allergies: {user_profile_data['allergies']}")
+                except Exception as e:
+                    logger.info(f"No profile found for {email_id}: {e}")
+                    user_profile_data = None
+            
+            # Execute RAG pipeline with user profile
             response_map, message_data_update_post_rag_pipeline = execute_rag_pipeline(
                 query_in_english,
                 input_language_detected,
@@ -141,9 +182,9 @@ def process_query(original_query, email_id, authenticated_user={}):
                 user_name=user_name,
                 message_id=message_id,
                 chat_history=chat_history,
+                user_profile=user_profile_data,
             )
         else:
-            # Kept for compatibility; not used
             response_map.update({"generated_final_response": None})
 
         # Translate response back to input language
@@ -172,6 +213,8 @@ def process_query(original_query, email_id, authenticated_user={}):
         message_data_to_insert_or_update["message_response"] = final_response
         message_data_to_insert_or_update["message_translated_response"] = translated_response
         message_data_to_insert_or_update.update(message_data_update_post_rag_pipeline)
+        
+        logger.info(f"Query processed successfully for {email_id}")
 
     except Exception as error:
         logger.error(error, exc_info=True)

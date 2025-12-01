@@ -64,8 +64,8 @@ def send_request(
         response = session.send(
             request_prepped,
             stream=True,
-            # verify=certifi.where(),  # Disabled due to SSL certificate error
-            verify=False,  # FIXED: Bypass SSL verification
+            verify=certifi.where(),
+            # verify=False,
         )
         logger.info(f"URL: {url} | Response Status Code: {response.status_code}")
         # json_response = json.loads(response.text) if response and response.status_code == 200 else {}
