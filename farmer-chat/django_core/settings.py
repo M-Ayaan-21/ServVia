@@ -90,7 +90,10 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CACHES = {
-    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'servvia-cache',
+    }
 }
 
 # DRF renderers (Browsable API + JSON). Switch to JSON-only if you want.
@@ -102,3 +105,4 @@ REST_FRAMEWORK = {
 }
 
 configure_logging()
+
