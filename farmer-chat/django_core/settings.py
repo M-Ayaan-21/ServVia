@@ -31,6 +31,9 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",  # ensure DRF templates & browsable API work
     "user_profile",
+    "skin_analysis",
+    "lab_report",
+
 ]
 
 MIDDLEWARE = [
@@ -106,3 +109,16 @@ REST_FRAMEWORK = {
 
 configure_logging()
 
+# ============================================
+# ServVia CV Module Settings
+# ============================================
+
+# Media settings for file uploads
+
+import os
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os. path.join(BASE_DIR, 'media')
+
+# Gemini API Key for Skin Analysis & Lab Report
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '')
