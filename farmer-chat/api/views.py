@@ -34,7 +34,7 @@ class ChatAPIViewSet(GenericViewSet):
             generate answer for a given user text query in text
         Synthesise Audio :
             generate audio in base64 format for a given text using Text-to-Speech
-        Transcribe Audio :
+        Transcribe Audio : 
             generate transcriptions or text for given voice query using Speech-to-Text
         Get Answer by Voice Query :
             generate answer for a given user voice query in voice
@@ -60,14 +60,13 @@ class ChatAPIViewSet(GenericViewSet):
             # check for authenticated user using email
             authenticated_user = authenticate_user_based_on_email(email_id)
 
-            # if is_authenticated == False:
-            if not authenticated_user:
+            # if is_authenticated == False: 
+            if not authenticated_user: 
                 response_data.data["message"] = "Invalid Email ID"
                 response_data.status_code = status.HTTP_401_UNAUTHORIZED
                 return response_data
-                # return Response(response_data, status=status.HTTP_401_UNAUTHORIZED)
 
-            if not original_query:
+            if not original_query: 
                 response_data.data["message"] = "Please submit a query."
                 response_data.status_code = status.HTTP_400_BAD_REQUEST
                 return response_data
@@ -90,16 +89,15 @@ class ChatAPIViewSet(GenericViewSet):
             response_data.data.update(
                 {"message": "Something went wrong", "error": True}
             )
-            response_data.status_code = status_code = (
-                status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            response_data.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
 
         return response_data
 
     @action(detail=False, methods=["post"])
     def synthesise_audio(self, request):
         """
-        Generate audio in base64 format using Text-to-speech for a given text
+        Generate audio in base64 format using Text-to-speech for a given text. 
+        Uses OpenAI TTS (primary) with Google TTS fallback for natural-sounding speech.
         """
         email_id = request.data.get("email_id")
         original_text = request.data.get("text")
@@ -110,45 +108,53 @@ class ChatAPIViewSet(GenericViewSet):
             # check for authenticated user using email
             authenticated_user = authenticate_user_based_on_email(email_id)
 
-            # if is_authenticated == False:
-            if not authenticated_user:
+            # if is_authenticated == False: 
+            if not authenticated_user: 
                 response_data.data["message"] = "Invalid Email ID"
                 response_data.status_code = status.HTTP_401_UNAUTHORIZED
                 return response_data
-                # return Response(response_data, status=status.HTTP_401_UNAUTHORIZED)
 
-            if not original_text:
+            if not original_text: 
                 response_data.data["message"] = (
                     "Please submit text for audio synthesis."
                 )
                 response_data.status_code = status.HTTP_400_BAD_REQUEST
                 return response_data
 
+            # Log TTS request for debugging
+            text_preview = original_text[:100] + "..." if len(original_text) > 100 else original_text
+            logger.info(f"🔊 TTS request from {email_id}: {len(original_text)} chars")
+
+            # Generate audio using TTS service (OpenAI primary, Google fallback)
             response_audio = process_output_audio(original_text, message_id)
 
-            if not response_audio:
+            # Handle TTS failure
+            if not response_audio: 
+                logger.warning(f"❌ TTS failed for {email_id}")
                 response_data.data.update(
                     {
-                        "message": "Invalid base64 string or unable to generate transcriptions currently.",
-                        "audio": input_audio_base64,
+                        "message": "Unable to generate audio. Please try again.",
+                        "audio": None,
+                        "error": True
                     }
                 )
-                response_data.status_code = status.HTTP_401_UNAUTHORIZED
+                response_data.status_code = status.HTTP_400_BAD_REQUEST
                 return response_data
-                # return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
 
+            # Success - return audio
+            logger.info(f"✅ TTS success for {email_id}")
             response_data.data.update(
                 {
-                    "text": original_text,
+                    "text": text_preview,
                     "audio": response_audio,
                     "message": "Audio synthesis successful",
                 }
             )
 
         except Exception as error:
-            logger.error(error, exc_info=True)
+            logger.error(f"TTS error: {error}", exc_info=True)
             response_data.data.update(
-                {"message": "Something went wrong", "error": True}
+                {"message": "Something went wrong during audio synthesis", "error": True, "audio": None}
             )
             response_data.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
 
@@ -180,14 +186,13 @@ class ChatAPIViewSet(GenericViewSet):
             # check for authenticated user using email
             authenticated_user = authenticate_user_based_on_email(email_id)
 
-            # if is_authenticated == False:
-            if not authenticated_user:
+            # if is_authenticated == False: 
+            if not authenticated_user: 
                 response_data.data["message"] = "Invalid Email ID"
                 response_data.status_code = status.HTTP_401_UNAUTHORIZED
                 return response_data
-                # return Response(response_data, status=status.HTTP_401_UNAUTHORIZED)
 
-            if not original_query:
+            if not original_query: 
                 response_data.data["message"] = (
                     "Please share a valid base64 string as a query."
                 )
@@ -210,7 +215,6 @@ class ChatAPIViewSet(GenericViewSet):
                 response_data.data["message"] = "Invalid file or base64 string."
                 response_data.status_code = status.HTTP_400_BAD_REQUEST
                 return response_data
-                # return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
 
             response_map = process_transcriptions(
                 input_query_file,
@@ -250,7 +254,6 @@ class ChatAPIViewSet(GenericViewSet):
                 {"message": "Something went wrong", "error": True}
             )
             response_data.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-            # return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return response_data
 
@@ -284,16 +287,14 @@ class ChatAPIViewSet(GenericViewSet):
             confidence_score = transcribe_response_data.get("confidence_score", None)
             response_data.data = transcribe_response_data
 
-            # if is_authenticated == False:
+            # if is_authenticated == False: 
             if transcribe_response.status_code == 401:
                 response_data.status_code = status.HTTP_401_UNAUTHORIZED
                 return response_data
-                # return Response(response_data, status=status.HTTP_401_UNAUTHORIZED)
 
             if transcribe_response.status_code == 400:
                 response_data.status_code = status.HTTP_400_BAD_REQUEST
                 return response_data
-                # return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
 
             if transcribe_response.status_code == 500:
                 response_data.data.update(
@@ -301,7 +302,6 @@ class ChatAPIViewSet(GenericViewSet):
                 )
                 response_data.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
                 return response_data
-                # return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
 
             if (
                 confidence_score
@@ -349,7 +349,6 @@ class ChatAPIViewSet(GenericViewSet):
                 {"message": "Something went wrong", "error": True}
             )
             response_data.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-            # response_data.update({"message": "Something went wrong", "error": True}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return response_data
 
@@ -386,7 +385,6 @@ class LanguageViewSet(GenericViewSet):
                 response_data.data["message"] = "Invalid Email ID"
                 response_data.status_code = status.HTTP_401_UNAUTHORIZED
                 return response_data
-                # return Response(response_data, status=status.HTTP_401_UNAUTHORIZED)
 
             language_list = get_all_languages()
             if len(language_list) >= 1:
@@ -425,13 +423,11 @@ class LanguageViewSet(GenericViewSet):
                 response_data.data["message"] = "Invalid Email ID"
                 response_data.status_code = status.HTTP_401_UNAUTHORIZED
                 return response_data
-                # return Response(response_data, status=status.HTTP_401_UNAUTHORIZED)
 
             if not language_id:
                 response_data.data["message"] = "Language ID not submitted"
                 response_data.status_code = status.HTTP_400_BAD_REQUEST
                 return response_data
-                # return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
 
             user = get_user_by_email(email_id)
             user_id = user.get("user_id")
@@ -450,7 +446,6 @@ class LanguageViewSet(GenericViewSet):
                 )
                 response_data.status_code = status.HTTP_400_BAD_REQUEST
                 return response_data
-                # return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
 
             if saved_user_preferred_language:
                 response_data.data.update(
@@ -469,7 +464,7 @@ class LanguageViewSet(GenericViewSet):
                 )
                 response_data.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
 
-        except Exception as error:
+        except Exception as error: 
             logger.error(error, exc_info=True)
             response_data.data.update(
                 {"message": "Something went wrong", "error": True}
