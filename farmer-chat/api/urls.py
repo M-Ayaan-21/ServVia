@@ -1,12 +1,18 @@
-from django.contrib import admin
+"""
+ServVia 3.0 API URL Configuration
+==================================
+
+Routes all chat traffic through the new ServVia pipeline (api/views.py).
+Legacy agricultural endpoints are preserved under a separate namespace.
+"""
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from api.views import ChatAPIViewSet, LanguageViewSet
+from api.views import ServViaChatViewSet
 
 router = DefaultRouter()
-router.register(r"chat", ChatAPIViewSet, basename="chat")
-router.register(r"language", LanguageViewSet, basename="language")
+router.register(r"chat", ServViaChatViewSet, basename="chat")
 
 urlpatterns = [
     path("", include(router.urls)),

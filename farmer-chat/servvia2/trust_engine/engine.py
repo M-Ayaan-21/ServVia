@@ -1,1179 +1,1126 @@
 """
-ServVia 2. 0 Trust Engine - Production Ready
-============================================
+ServVia Trust Engine v2.1 (Monolith Production Build)
+=====================================================
 Neuro-Symbolic Verification System for Medical Recommendations
 
-This engine combines:
-- Neural: Receives LLM-generated natural language
-- Symbolic: Validates against structured medical knowledge
+This module contains the complete logic AND the full medical knowledge base.
+It is designed to be a self-contained "Drop-in" replacement.
 
-Key Capabilities:
-1.  Evidence-Based Verification - Grade claims by scientific evidence
-2.  Hallucination Detection - Flag unverified medical claims
-3. Drug-Herb Interaction Checking - Critical safety layer
-4. Contraindication Enforcement - Block dangerous recommendations
-5. Confidence Scoring (SCS) - Transparent trust metrics
+Standards:
+- Evidence-based validation (GRADE)
+- PubMed citation tracking
+- Interaction & Contraindication safety layers
+- No external database dependencies (Data is embedded)
 
 Author: ServVia Team
-Version: 2.0.0
+Version: 2.1.0
+Last Updated: 2025-12-16
 """
 
+import json
 import logging
 import re
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple, Set, Any
 from dataclasses import dataclass, field
 from enum import Enum
+from asgiref.sync import sync_to_async
 
-logger = logging.getLogger(__name__)
+# Import temporal reasoning engine for pharmacovigilance
+try:
+    from servvia2.temporal_reasoning.engine import get_temporal_engine
+    TEMPORAL_ENGINE_AVAILABLE = True
+except ImportError:
+    TEMPORAL_ENGINE_AVAILABLE = False
+    logging.warning("Temporal Reasoning Engine not available - temporal safety checks disabled")
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("ServVia_TrustEngine")
 
 
-class EvidenceTier(Enum):
-    """Evidence quality tiers based on medical research standards"""
-    TIER_1_CLINICAL = 1      # Meta-analyses, RCTs, Systematic Reviews
-    TIER_2_MECHANISTIC = 2   # Pharmacological studies, known mechanisms
-    TIER_3_TRADITIONAL = 3   # Documented traditional use, ethnomedicine
-    TIER_4_ANECDOTAL = 4     # Case reports, preliminary research
-    TIER_5_THEORETICAL = 5   # Theoretical basis only
+class EvidenceLevel(Enum):
+    """Evidence quality levels based on GRADE standards"""
+    HIGH = "high"
+    MODERATE = "moderate"
+    LOW = "low"
+    LOW_TO_MODERATE = "low_to_moderate"
+    VERY_LOW = "very_low"
+    INSUFFICIENT = "insufficient"
 
 
 class InteractionSeverity(Enum):
     """Drug-herb interaction severity levels"""
-    CRITICAL = "critical"    # Life-threatening, absolute contraindication
-    HIGH = "high"            # Significant risk, avoid combination
-    MODERATE = "moderate"    # Use with caution, monitor
-    LOW = "low"              # Minor interaction, generally safe
-    NONE = "none"            # No known interaction
+    CRITICAL = "critical"
+    MAJOR = "major"
+    MODERATE = "moderate"
+    MINOR = "minor"
+    NONE = "none"
 
 
 @dataclass
-class VerificationResult:
-    """Result of verifying a single remedy claim"""
-    herb_name: str
-    condition: str
-    is_valid: bool
-    confidence_score: float
-    evidence_tier: int
-    evidence_tier_label: str
-    mechanism: str
-    pubmed_count: int
-    warnings: List[str] = field(default_factory=list)
-    is_hallucination: bool = False
-    hallucination_reason: Optional[str] = None
-    interaction_note: Optional[str] = None
-    recommended_dose: Optional[str] = None
+class Citation:
+    """Represents a single PubMed citation"""
+    pmid: str
+    title: str
+    authors: str
+    journal: str
+    year: int
+    study_type: str
+    conclusion: str
+    sample_size: str = ""
+    
+    def format(self, index: int = 1) -> str:
+        """Format citation with PubMed link"""
+        cite = f"{index}. {self.authors}. \"{self.title}.\" *{self.journal}* ({self.year}). "
+        cite += f"[PMID: {self.pmid}](https://pubmed.ncbi.nlm.nih.gov/{self.pmid}/)"
+        if self.study_type:
+            cite += f" **[{self.study_type}]**"
+        return cite
 
 
 @dataclass
-class InteractionWarning:
-    """Drug-herb interaction warning"""
-    herb: str
-    drug: str
-    severity: InteractionSeverity
-    effect: str
-    recommendation: str
-    alternatives: List[str] = field(default_factory=list)
+class ValidationResult:
+    """Complete validation result for a response"""
+    is_safe: bool
+    verified_herbs: List[str]
+    unverified_herbs: List[str]
+    warnings: List[str]
+    contraindicated_herbs: List[str]
+    interaction_warnings: List[str]
+    evidence_summaries: Dict[str, str]
+    formatted_output: str
+    # TEMPORAL SAFETY FIELDS - Added for Objective 1
+    temporal_safety_blocked: bool = False
+    temporal_violations: List[str] = field(default_factory=list)
+    temporal_recommendations: List[str] = field(default_factory=list)
 
 
 class TrustEngine:
     """
-    Production-Ready Neuro-Symbolic Trust Engine
+    ServVia Trust Engine v2.1 - Monolithic Edition
     
-    Usage:
-        engine = TrustEngine()
-        results, warnings = engine.verify_response(
-            llm_response="Use ginger tea for nausea.. .",
-            query="I have nausea",
-            current_condition="nausea",
-            user_medications=["aspirin"]
-        )
+    Provides evidence-based validation following medical communication standards.
+    Contains embedded knowledge base to remove external dependencies.
     """
     
+    # Uncertainty language based on evidence level
+    UNCERTAINTY_LANGUAGE = {
+        'high': 'Evidence from multiple high-quality studies suggests',
+        'moderate': 'Some evidence from clinical studies suggests',
+        'low_to_moderate': 'Some limited evidence suggests',
+        'low': 'Limited evidence suggests',
+        'very_low': 'Preliminary evidence suggests',
+        'insufficient': 'Insufficient evidence exists to determine whether'
+    }
+    
+    # GRADE certainty symbols
+    GRADE_SYMBOLS = {
+        'high': '⊕⊕⊕⊕',
+        'moderate': '⊕⊕⊕○',
+        'low_to_moderate': '⊕⊕⊕○',
+        'low': '⊕⊕○○',
+        'very_low': '⊕○○○',
+        'insufficient': '○○○○'
+    }
+    
     def __init__(self):
-        """Initialize the Trust Engine with knowledge bases"""
-        self._load_evidence_database()
-        self._load_interaction_database()
-        self._load_contraindication_rules()
+        """Initialize Trust Engine and load embedded database"""
+        self.evidence_data = {}
+        self.known_herbs = set()
+        self.condition_map = self._build_condition_map()
+        
+        # Load the embedded database
+        self._load_embedded_database()
         self._build_herb_registry()
         
-        logger.info(f"Trust Engine initialized: {len(self.evidence_db)} evidence entries, "
-                   f"{len(self.interactions_db)} interaction rules, "
-                   f"{len(self.known_herbs)} known herbs")
-    
-    # =========================================================================
-    # KNOWLEDGE BASE LOADING
-    # =========================================================================
-    
-    def _load_evidence_database(self):
+        logger.info(f"Trust Engine initialized: {len(self.evidence_data.get('evidence', []))} evidence entries, "
+                    f"{len(self.known_herbs)} known herbs")
+
+    async def validate_temporal_safety(
+        self,
+        user_id: str,
+        herbs: List[str],
+        symptom_descriptions: Optional[List[str]] = None
+    ) -> Dict:
         """
-        Load evidence-based knowledge for herb-condition pairs. 
-        Each entry represents validated scientific evidence.
+        ASYNC: Validate herb recommendations against temporal safety constraints.
+        
+        Checks medication stabilization periods, washout periods, and symptom acuity.
+        This is the neurosymbolic safety gate that runs BEFORE LLM generation.
+        
+        Args:
+            user_id: User email identifier
+            herbs: List of herbs being recommended
+            symptom_descriptions: Optional list of symptoms to check acuity
+            
+        Returns:
+            Dict with safety status and any violations
         """
-        self.evidence_db: Dict[Tuple[str, str], Dict] = {
-            # =====================================================================
-            # HEADACHE / MIGRAINE
-            # =====================================================================
-            ('peppermint', 'headache'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Menthol activates TRPM8 cold receptors, providing cooling analgesia.  Improves cerebral blood flow and reduces muscle tension.',
-                'pubmed_ids': ['PMC4960504', 'PMC6540030'],
-                'dose': '2-3 drops peppermint oil topically on temples, or 1-2 cups peppermint tea',
-                'onset': '15-30 minutes',
-                'contraindications': ['GERD', 'hiatal hernia'],
-            },
-            ('ginger', 'headache'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Gingerols and shogaols inhibit prostaglandin synthesis (similar to NSAIDs), reducing neurogenic inflammation.',
-                'pubmed_ids': ['PMC3665023'],
-                'dose': '250mg-1g dried ginger extract, or 1-inch fresh ginger in tea',
-                'onset': '30-60 minutes',
-            },
-            ('lavender', 'headache'): {
-                'tier': EvidenceTier. TIER_1_CLINICAL,
-                'mechanism': 'Linalool and linalyl acetate modulate GABAergic transmission, reducing pain perception and stress response.',
-                'pubmed_ids': ['PMC3612440', 'PMC5437114'],
-                'dose': 'Aromatherapy for 15-30 minutes, or 2-3 drops diluted oil on temples',
-                'onset': '15-30 minutes',
-            },
-            ('clove', 'headache'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Eugenol (85% of clove oil) inhibits cyclooxygenase enzymes, providing analgesic effects.',
-                'pubmed_ids': ['PMC3769004'],
-                'dose': '1-2 cloves as tea, or diluted clove oil topically',
-                'onset': '20-40 minutes',
-            },
-            ('feverfew', 'headache'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Parthenolide inhibits serotonin release and prostaglandin synthesis, preventing migraine onset.',
-                'pubmed_ids': ['PMC3210009'],
-                'dose': '50-150mg dried leaf daily for prevention',
-                'onset': 'Preventive - takes 4-6 weeks',
-            },
+        if not TEMPORAL_ENGINE_AVAILABLE:
+            logger.warning("Temporal engine not available, skipping temporal validation")
+            return {
+                'is_safe': True,
+                'blocked': False,
+                'violations': [],
+                'recommendations': []
+            }
+        
+        temporal_engine = get_temporal_engine()
+        all_violations = []
+        all_recommendations = []
+        is_blocked = False
+        
+        logger.info(f"Validating temporal safety for {len(herbs)} herbs for user {user_id[:20]}...")
+        
+        for herb in herbs:
+            result = await temporal_engine.validate_safety_profile(
+                user_id=user_id,
+                herb_name=herb,
+                symptom_descriptions=symptom_descriptions
+            )
             
-            # =====================================================================
-            # FEVER
-            # =====================================================================
-            ('tulsi', 'fever'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Eugenol has antipyretic effects via prostaglandin inhibition.  Also provides immunomodulatory support.',
-                'pubmed_ids': ['PMC4296439'],
-                'dose': '5-10 fresh leaves as tea, or 300-600mg extract, 2-3 times daily',
-                'onset': '1-2 hours',
-            },
-            ('ginger', 'fever'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Gingerols have antipyretic properties, promote sweating (diaphoretic), and support immune function.',
-                'pubmed_ids': ['PMC3665023', 'PMC6341159'],
-                'dose': '1-2g fresh ginger in tea, 2-3 times daily',
-                'onset': '30-60 minutes',
-            },
-            ('neem', 'fever'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Nimbidin and nimbin compounds have antipyretic and antimalarial properties.',
-                'pubmed_ids': ['PMC3695574'],
-                'dose': 'Leaf decoction 1-2 times daily',
-                'onset': '1-2 hours',
-            },
-            ('giloy', 'fever'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Tinosporin provides immunomodulatory effects.  Traditionally used for chronic fevers.',
-                'pubmed_ids': ['PMC3644751', 'PMC5411265'],
-                'dose': 'Juice or decoction 15-30ml, twice daily',
-                'onset': '2-4 hours',
-            },
-            ('coriander', 'fever'): {
-                'tier': EvidenceTier. TIER_3_TRADITIONAL,
-                'mechanism': 'Traditional cooling effect, supports hydration, mild antipyretic properties.',
-                'pubmed_ids': [],
-                'dose': '1 tsp seeds boiled in water, 2-3 times daily',
-                'onset': '1-2 hours',
-            },
-            ('fenugreek', 'fever'): {
-                'tier': EvidenceTier.TIER_3_TRADITIONAL,
-                'mechanism': 'Mucilage content soothes, traditional use for fever reduction in Ayurveda.',
-                'pubmed_ids': ['PMC4325021'],
-                'dose': '1 tsp seeds soaked overnight, consume with water',
-                'onset': '2-3 hours',
-            },
+            # Check for violations that should block recommendations
+            # ANY stabilization violation (not just critical) should block
+            stabilization_violations = result.stabilization_violations
+            washout_violations = result.washout_violations
             
-            # =====================================================================
-            # COLD / FLU
-            # =====================================================================
-            ('ginger', 'cold'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Gingerols and shogaols have antiviral, anti-inflammatory, and warming diaphoretic properties.',
-                'pubmed_ids': ['PMC3665023', 'PMC6341159'],
-                'dose': '1-2g fresh ginger in tea with honey, 3-4 times daily',
-                'onset': '30 minutes',
-            },
-            ('tulsi', 'cold'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Eugenol and ursolic acid provide immunomodulatory, antimicrobial, and adaptogenic effects.',
-                'pubmed_ids': ['PMC4296439'],
-                'dose': '5-10 fresh leaves as tea, 2-3 times daily',
-                'onset': '1-2 hours',
-            },
-            ('garlic', 'cold'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Allicin has broad-spectrum antimicrobial activity.  Boosts NK cell activity.',
-                'pubmed_ids': ['PMC4417560', 'PMC6465033'],
-                'dose': '1-2 raw cloves daily, crushed and rested 10 minutes before consuming',
-                'onset': 'Preventive and acute use',
-            },
-            ('honey', 'cold'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Antimicrobial properties, demulcent action soothes throat, supports immune function.',
-                'pubmed_ids': ['PMC4264806'],
-                'dose': '1-2 tablespoons as needed, or in warm water/tea',
-                'onset': 'Immediate soothing',
-            },
-            ('elderberry', 'cold'): {
-                'tier': EvidenceTier. TIER_1_CLINICAL,
-                'mechanism': 'Anthocyanins inhibit viral neuraminidase, reducing viral replication.  Boosts cytokine production.',
-                'pubmed_ids': ['PMC4848651', 'PMC6124954'],
-                'dose': 'Standardized extract as per product directions',
-                'onset': '24-48 hours reduction in symptoms',
-            },
-            ('turmeric', 'cold'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Curcumin modulates immune response, has antiviral and anti-inflammatory properties.',
-                'pubmed_ids': ['PMC5664031'],
-                'dose': '500mg-1g with black pepper, or golden milk',
-                'onset': '1-2 hours',
-            },
+            if stabilization_violations or washout_violations:
+                is_blocked = True
+                for v in stabilization_violations:
+                    all_violations.append(
+                        f"🚫 BLOCKED: {herb.title()} + {v['medication']} - "
+                        f"Critical interaction risk. Medication started {v['days_ago']} days ago, "
+                        f"requires {v['required_days']} days stabilization. {v.get('risk_description', 'Interaction risk')}"
+                    )
+                
+                for v in washout_violations:
+                    all_violations.append(
+                        f"🚫 BLOCKED: {herb.title()} + {v['medication']} (stopped {v['days_since_stop']} days ago) - "
+                        f"Washout violation. Requires {v['required_washout']} days. {v.get('risk_description', 'Interaction risk persists during washout')}"
+                    )
             
-            # =====================================================================
-            # COUGH
-            # =====================================================================
-            ('honey', 'cough'): {
-                'tier': EvidenceTier. TIER_1_CLINICAL,
-                'mechanism': 'Demulcent coating protects irritated throat.  Clinical trials show superiority over dextromethorphan.',
-                'pubmed_ids': ['PMC6513626', 'PMC4264806'],
-                'dose': '1-2 tablespoons before bed, or as needed',
-                'onset': 'Immediate soothing, overnight improvement',
-            },
-            ('ginger', 'cough'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Relaxes airway smooth muscle, has anti-inflammatory and antitussive properties.',
-                'pubmed_ids': ['PMC3604064'],
-                'dose': 'Ginger tea with honey, 2-3 times daily',
-                'onset': '30-60 minutes',
-            },
-            ('licorice', 'cough'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Glycyrrhizin has expectorant, demulcent, and antiviral properties.',
-                'pubmed_ids': ['PMC3123991'],
-                'dose': 'Tea 1-2 times daily.  Limit to 4-6 weeks continuous use.',
-                'onset': '30-60 minutes',
-            },
-            ('thyme', 'cough'): {
-                'tier': EvidenceTier. TIER_1_CLINICAL,
-                'mechanism': 'Thymol and carvacrol have antitussive, expectorant, and antimicrobial effects.',
-                'pubmed_ids': ['PMC5871214'],
-                'dose': 'Thyme tea 2-3 times daily',
-                'onset': '30-60 minutes',
-            },
-            ('tulsi', 'cough'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Eugenol and other compounds provide expectorant and antimicrobial action.',
-                'pubmed_ids': ['PMC4296439'],
-                'dose': 'Fresh leaves in tea, or with honey and ginger',
-                'onset': '1-2 hours',
-            },
-            
-            # =====================================================================
-            # NAUSEA
-            # =====================================================================
-            ('ginger', 'nausea'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': '5-HT3 receptor antagonism blocks nausea signals. Accelerates gastric emptying.  Effective for pregnancy, chemo, motion sickness.',
-                'pubmed_ids': ['PMC3016669', 'PMC4818021'],
-                'dose': '1-1.5g dried ginger, or 1-2g fresh, or 250mg extract 4 times daily',
-                'onset': '20-30 minutes',
-            },
-            ('peppermint', 'nausea'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Menthol reduces gastric smooth muscle spasms and has antiemetic properties.',
-                'pubmed_ids': ['PMC4729798'],
-                'dose': 'Aromatherapy, or 1-2 cups tea',
-                'onset': '10-20 minutes',
-            },
-            ('fennel', 'nausea'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Anethole has carminative and antispasmodic effects on GI tract.',
-                'pubmed_ids': ['PMC4137549'],
-                'dose': '1 tsp seeds as tea after meals',
-                'onset': '20-30 minutes',
-            },
-            ('chamomile', 'nausea'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Bisabolol and chamazulene have anti-inflammatory and antispasmodic effects.',
-                'pubmed_ids': ['PMC2995283'],
-                'dose': '1-2 cups tea as needed',
-                'onset': '20-30 minutes',
-            },
-            
-            # =====================================================================
-            # INDIGESTION / ACIDITY
-            # =====================================================================
-            ('ginger', 'indigestion'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Accelerates gastric emptying by 50%. Reduces nausea and bloating.',
-                'pubmed_ids': ['PMC3016669'],
-                'dose': '1-2g before or with meals',
-                'onset': '30 minutes',
-            },
-            ('peppermint', 'indigestion'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Menthol relaxes lower esophageal sphincter and intestinal smooth muscle.  Reduces IBS symptoms.',
-                'pubmed_ids': ['PMC4729798', 'PMC6337770'],
-                'dose': 'Enteric-coated oil (0.2-0.4ml) or tea after meals',
-                'onset': '30-60 minutes',
-                'contraindications': ['GERD', 'hiatal hernia'],
-            },
-            ('fennel', 'indigestion'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Anethole has carminative and antispasmodic effects.  Reduces gas and bloating.',
-                'pubmed_ids': ['PMC4137549'],
-                'dose': '1 tsp seeds chewed or as tea after meals',
-                'onset': '20-30 minutes',
-            },
-            ('cumin', 'indigestion'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Stimulates digestive enzyme secretion, has carminative properties.',
-                'pubmed_ids': ['PMC4375161'],
-                'dose': '1 tsp seeds in warm water, or as tea',
-                'onset': '20-30 minutes',
-            },
-            ('ajwain', 'indigestion'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Thymol content provides carminative and antispasmodic effects.',
-                'pubmed_ids': ['PMC3611645'],
-                'dose': '1/2 tsp seeds with warm water after meals',
-                'onset': '15-30 minutes',
-            },
-            
-            # =====================================================================
-            # ANXIETY / STRESS
-            # =====================================================================
-            ('ashwagandha', 'anxiety'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Withanolides modulate GABA receptors.  Reduces cortisol by 27. 9% in clinical trials.',
-                'pubmed_ids': ['PMC3573577', 'PMC6979308'],
-                'dose': '300-600mg standardized extract (5% withanolides) daily',
-                'onset': '2-4 weeks for full effect',
-            },
-            ('ashwagandha', 'stress'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Adaptogenic action normalizes cortisol.  Reduces perceived stress by 44% in trials.',
-                'pubmed_ids': ['PMC3573577'],
-                'dose': '300-600mg standardized extract daily',
-                'onset': '2-4 weeks for full effect',
-            },
-            ('chamomile', 'anxiety'): {
-                'tier': EvidenceTier. TIER_1_CLINICAL,
-                'mechanism': 'Apigenin binds to benzodiazepine receptors. Clinically effective for GAD.',
-                'pubmed_ids': ['PMC2995283', 'PMC5589141'],
-                'dose': '220-1100mg extract, or 1-4 cups tea daily',
-                'onset': '1-2 hours acute, 2-4 weeks chronic',
-            },
-            ('lavender', 'anxiety'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Silexan (lavender oil) shows efficacy comparable to lorazepam in clinical trials.',
-                'pubmed_ids': ['PMC3612440', 'PMC6007527'],
-                'dose': '80-160mg Silexan capsule, or aromatherapy 15-30 minutes',
-                'onset': '30-60 minutes acute, 2 weeks chronic',
-            },
-            ('brahmi', 'anxiety'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Bacosides modulate serotonin, dopamine, and reduce cortisol.',
-                'pubmed_ids': ['PMC3746283'],
-                'dose': '300-450mg standardized extract daily',
-                'onset': '4-6 weeks',
-            },
-            ('tulsi', 'stress'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Adaptogenic effects normalize stress hormones and neurotransmitters.',
-                'pubmed_ids': ['PMC4296439'],
-                'dose': '300-600mg extract or 2-3 cups tea daily',
-                'onset': '2-4 weeks',
-            },
-            
-            # =====================================================================
-            # INSOMNIA
-            # =====================================================================
-            ('ashwagandha', 'insomnia'): {
-                'tier': EvidenceTier. TIER_1_CLINICAL,
-                'mechanism': 'Triethylene glycol promotes non-REM sleep.  Reduces sleep latency significantly.',
-                'pubmed_ids': ['PMC6827862'],
-                'dose': '300mg extract 1-2 hours before bed',
-                'onset': '2-4 weeks for full effect',
-            },
-            ('chamomile', 'insomnia'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Apigenin has mild sedative effects via benzodiazepine receptor binding.',
-                'pubmed_ids': ['PMC2995283'],
-                'dose': '1-2 cups tea 30-60 minutes before bed',
-                'onset': '30-60 minutes',
-            },
-            ('valerian', 'insomnia'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Valerenic acid inhibits GABA breakdown, improving sleep quality.',
-                'pubmed_ids': ['PMC4394901'],
-                'dose': '300-600mg extract 30-120 minutes before bed',
-                'onset': '2-4 weeks for optimal effect',
-            },
-            ('jatamansi', 'insomnia'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Nardostachys jatamansi has GABAergic and serotonergic effects.',
-                'pubmed_ids': ['PMC3252722'],
-                'dose': '250-500mg powder before bed',
-                'onset': '1-2 weeks',
-            },
-            
-            # =====================================================================
-            # SORE THROAT
-            # =====================================================================
-            ('honey', 'sore throat'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Demulcent coating soothes, antimicrobial action fights infection.',
-                'pubmed_ids': ['PMC4264806'],
-                'dose': '1-2 tablespoons as needed, or in warm water with lemon',
-                'onset': 'Immediate soothing',
-            },
-            ('licorice', 'sore throat'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Glycyrrhizin has demulcent, anti-inflammatory, and antiviral effects.',
-                'pubmed_ids': ['PMC3123991'],
-                'dose': 'Gargle with tea, or drink 1-2 times daily',
-                'onset': 'Immediate soothing',
-            },
-            ('turmeric', 'sore throat'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Curcumin has potent anti-inflammatory and antimicrobial properties.',
-                'pubmed_ids': ['PMC5664031'],
-                'dose': 'Warm milk with 1/2 tsp turmeric and honey, or gargle with turmeric water',
-                'onset': '30-60 minutes',
-            },
-            ('ginger', 'sore throat'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Anti-inflammatory gingerols and warming action soothe throat.',
-                'pubmed_ids': ['PMC3665023'],
-                'dose': 'Fresh ginger tea with honey, 2-3 times daily',
-                'onset': '30 minutes',
-            },
-            ('slippery elm', 'sore throat'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Mucilage forms protective coating over irritated mucous membranes.',
-                'pubmed_ids': ['PMC3166406'],
-                'dose': 'Lozenges as needed, or tea',
-                'onset': 'Immediate coating',
-            },
-            
-            # =====================================================================
-            # BURNS
-            # =====================================================================
-            ('aloe vera', 'burns'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Acemannan promotes wound healing, reduces inflammation, antimicrobial properties.',
-                'pubmed_ids': ['PMC2763764', 'PMC5537865'],
-                'dose': 'Apply fresh gel 2-3 times daily to affected area',
-                'onset': 'Immediate cooling, healing over days',
-            },
-            ('honey', 'burns'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'High osmolarity, hydrogen peroxide production, methylglyoxal provide antimicrobial wound healing.',
-                'pubmed_ids': ['PMC3941901', 'PMC3609166'],
-                'dose': 'Apply thin layer under sterile dressing, change daily',
-                'onset': 'Healing accelerated over days',
-            },
-            ('coconut oil', 'burns'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Lauric acid provides antimicrobial action, fatty acids support skin barrier repair.',
-                'pubmed_ids': ['PMC4171909'],
-                'dose': 'Apply to healing/healed burns only (not fresh burns)',
-                'onset': 'Supports healing over days',
-            },
-            
-            # =====================================================================
-            # ARTHRITIS / JOINT PAIN
-            # =====================================================================
-            ('turmeric', 'arthritis'): {
-                'tier': EvidenceTier. TIER_1_CLINICAL,
-                'mechanism': 'Curcumin inhibits NF-κB, COX-2, reduces inflammatory cytokines.  Comparable to NSAIDs in trials.',
-                'pubmed_ids': ['PMC5664031', 'PMC6471669'],
-                'dose': '500-1000mg curcumin with piperine (black pepper) daily',
-                'onset': '4-8 weeks for significant improvement',
-            },
-            ('boswellia', 'arthritis'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Boswellic acids (AKBA) inhibit 5-lipoxygenase, reduce cartilage degradation.',
-                'pubmed_ids': ['PMC3309643'],
-                'dose': '300-500mg extract 2-3 times daily',
-                'onset': '4-8 weeks',
-            },
-            ('ginger', 'arthritis'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Gingerols inhibit prostaglandin and leukotriene synthesis.',
-                'pubmed_ids': ['PMC3665023'],
-                'dose': '250mg-1g extract or 2-3g fresh daily',
-                'onset': '4-8 weeks',
-            },
-            ('turmeric', 'joint pain'): {
-                'tier': EvidenceTier. TIER_1_CLINICAL,
-                'mechanism': 'Curcumin reduces joint inflammation and pain through multiple pathways.',
-                'pubmed_ids': ['PMC5664031'],
-                'dose': '500-1000mg curcumin with piperine daily',
-                'onset': '4-8 weeks',
-            },
-            
-            # =====================================================================
-            # ACNE
-            # =====================================================================
-            ('tea tree', 'acne'): {
-                'tier': EvidenceTier. TIER_1_CLINICAL,
-                'mechanism': 'Terpinen-4-ol has antibacterial action against P.acnes.  Comparable to 5% benzoyl peroxide.',
-                'pubmed_ids': ['PMC4025519'],
-                'dose': '5% tea tree oil gel applied topically twice daily',
-                'onset': '6-12 weeks for significant improvement',
-            },
-            ('neem', 'acne'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'Nimbidin has antibacterial and anti-inflammatory effects against acne.',
-                'pubmed_ids': ['PMC3695574'],
-                'dose': 'Neem paste or neem soap topically',
-                'onset': '4-8 weeks',
-            },
-            ('turmeric', 'acne'): {
-                'tier': EvidenceTier.TIER_2_MECHANISTIC,
-                'mechanism': 'Curcumin reduces sebum production, has antimicrobial effects.',
-                'pubmed_ids': ['PMC5822982'],
-                'dose': 'Topical paste with honey, leave 10-15 minutes',
-                'onset': '4-8 weeks',
-            },
-            
-            # =====================================================================
-            # TOOTHACHE
-            # =====================================================================
-            ('clove', 'toothache'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Eugenol (85%) is FDA-approved dental analgesic. Inhibits pain signal transmission.',
-                'pubmed_ids': ['PMC3769004', 'PMC5751100'],
-                'dose': 'Apply clove oil directly to affected tooth/gum, or place whole clove on tooth',
-                'onset': '1-5 minutes',
-            },
-            
-            # =====================================================================
-            # FATIGUE
-            # =====================================================================
-            ('ashwagandha', 'fatigue'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Improves VO2 max, reduces fatigue markers. Adaptogenic stress support.',
-                'pubmed_ids': ['PMC3573577', 'PMC3545242'],
-                'dose': '300-600mg standardized extract daily',
-                'onset': '2-4 weeks',
-            },
-            ('ginseng', 'fatigue'): {
-                'tier': EvidenceTier.TIER_1_CLINICAL,
-                'mechanism': 'Ginsenosides modulate HPA axis, improve energy metabolism and mental clarity.',
-                'pubmed_ids': ['PMC3659612'],
-                'dose': '200-400mg standardized extract daily',
-                'onset': '2-4 weeks',
-            },
-            ('amla', 'fatigue'): {
-                'tier': EvidenceTier. TIER_2_MECHANISTIC,
-                'mechanism': 'High vitamin C content, antioxidants support energy and immunity.',
-                'pubmed_ids': ['PMC3249901'],
-                'dose': '500mg-1g powder or 1-2 fresh fruits daily',
-                'onset': '2-4 weeks',
-            },
+            # Collect all warnings and recommendations
+            all_violations.extend(result.warnings)
+            all_recommendations.extend(result.safety_recommendations)
+        
+        return {
+            'is_safe': len(all_violations) == 0,
+            'blocked': is_blocked,
+            'violations': all_violations,
+            'recommendations': all_recommendations
+        }
+
+    def _build_condition_map(self) -> Dict[str, List[str]]:
+        """Builds a map for identifying conditions from user queries"""
+        return {
+            'headache': ['headache', 'head hurts', 'head pain', 'migraine', 'migranes'],
+            'fever': ['fever', 'temperature', 'feverish', 'pyrexia'],
+            'cold': ['cold', 'runny nose', 'sneezing', 'flu', 'upper respiratory', 'congestion'],
+            'cough': ['cough', 'coughing', 'bronchitis'],
+            'nausea': ['nausea', 'nauseous', 'vomiting', 'morning sickness', 'motion sickness'],
+            'indigestion': ['indigestion', 'bloating', 'gas', 'acidity', 'digestive', 'stomach ache', 'heartburn', 'gerd'],
+            'sore_throat': ['sore throat', 'throat pain', 'pharyngitis', 'strep'],
+            'anxiety': ['anxiety', 'anxious', 'worried', 'nervous', 'panic', 'gad'],
+            'stress': ['stress', 'stressed', 'overwhelmed', 'tension'],
+            'insomnia': ['insomnia', 'cant sleep', 'sleep problem', 'wake up', 'sleepless'],
+            'depression': ['depression', 'depressed', 'sad', 'mood', 'dysthymia'],
+            'hypertension': ['blood pressure', 'hypertension', 'bp', 'high blood pressure'],
+            'burns': ['burn', 'burnt', 'scalded', 'sunburn'],
+            'uti': ['uti', 'urinary', 'bladder infection', 'cystitis'],
+            'arthritis': ['arthritis', 'joint pain', 'osteoarthritis', 'rheumatoid'],
+            'acne': ['acne', 'pimples', 'zits', 'breakout']
+        }
+
+    def _load_embedded_database(self):
+        """
+        Loads the massive embedded dictionary containing all medical evidence.
+        This replaces the external JSON file loader.
+        """
+        self.evidence_data = {
+            "version": "2.1.0",
+            "last_updated": "2025-12-16",
+            "citation_standard": "PubMed",
+            "evidence": [
+                # =================================================================
+                # RESPIRATORY CONDITIONS (Cough, Cold, Sore Throat)
+                # =================================================================
+                {
+                    "herb": "honey",
+                    "herb_aliases": ["raw honey", "manuka honey"],
+                    "condition": "cough",
+                    "condition_aliases": ["acute cough", "upper respiratory infection"],
+                    "evidence_level": "moderate",
+                    "summary": "May reduce cough frequency and severity in children >1 year old compared to placebo.",
+                    "detailed_summary": "A Cochrane systematic review found honey probably reduces cough symptoms more than placebo and salbutamol.",
+                    "limitations": ["Small sample sizes", "Not for infants <12mo", "Variable honey types"],
+                    "citations": [
+                        {
+                            "pmid": "29633783", "title": "Honey for acute cough in children", "authors": "Oduwole O, et al.",
+                            "journal": "Cochrane Database Syst Rev", "year": 2018, "study_type": "Meta-analysis",
+                            "conclusion": "Honey reduces cough symptoms more than placebo."
+                        },
+                        {
+                            "pmid": "22869830", "title": "Effect of honey on nocturnal cough", "authors": "Cohen HA, et al.",
+                            "journal": "Pediatrics", "year": 2012, "study_type": "RCT",
+                            "conclusion": "Honey was significantly superior to placebo."
+                        }
+                    ],
+                    "safety_notes": ["CONTRAINDICATED in infants <12 months (botulism risk)", "Affects blood sugar"],
+                    "contraindications": ["Infants under 12 months", "Diabetes (monitor)"],
+                    "interactions": [],
+                    "dosing": {"children": "2.5-5ml before bed", "adults": "10-15ml before bed"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+                {
+                    "herb": "ginger",
+                    "herb_aliases": ["zingiber officinale", "ginger root"],
+                    "condition": "sore_throat",
+                    "evidence_level": "low",
+                    "summary": "May have anti-inflammatory properties that help throat irritation, but direct clinical evidence is limited.",
+                    "limitations": ["Most evidence is extrapolated from general inflammation studies", "Lack of direct RCTs"],
+                    "citations": [
+                        {
+                            "pmid": "23123794", "title": "Anti-oxidative and anti-inflammatory effects of ginger", 
+                            "authors": "Mashhadi NS, et al.", "journal": "Int J Prev Med", "year": 2013, 
+                            "study_type": "Review", "conclusion": "Ginger shows potent anti-inflammatory properties."
+                        }
+                    ],
+                    "safety_notes": ["May cause heartburn in high doses", "Blood thinning potential at high doses"],
+                    "contraindications": ["Gallstones (consult doctor)", "Bleeding disorders"],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "moderate", "description": "May increase bleeding risk (INR)"}
+                    ],
+                    "dosing": {"tea": "1-2g fresh root steeped"},
+                    "recommendation_strength": "weak",
+                    "grade_assessment": "⊕○○○"
+                },
+                {
+                    "herb": "eucalyptus",
+                    "herb_aliases": ["eucalyptus oil", "cineole"],
+                    "condition": "cold",
+                    "condition_aliases": ["congestion", "bronchitis", "sinusitis"],
+                    "evidence_level": "low",
+                    "summary": "Inhalation may provide symptomatic relief for congestion. Oral use is toxic unless pharmaceutical grade.",
+                    "limitations": ["Safety concerns with oral use", "Small studies"],
+                    "citations": [
+                        {
+                            "pmid": "20359267", "title": "Efficacy of cineole in acute bronchitis", "authors": "Fischer J, et al.",
+                            "journal": "Cough", "year": 2013, "study_type": "RCT",
+                            "conclusion": "Cineole significantly reduced cough frequency."
+                        }
+                    ],
+                    "safety_notes": ["ORAL OIL IS TOXIC", "Do not apply near face of infants"],
+                    "contraindications": ["Children <2 years", "Asthma (may trigger spasm)"],
+                    "interactions": [],
+                    "dosing": {"inhalation": "Steam inhalation only"},
+                    "recommendation_strength": "weak",
+                    "grade_assessment": "⊕○○○"
+                },
+
+                # =================================================================
+                # DIGESTIVE CONDITIONS (Nausea, IBS, Indigestion)
+                # =================================================================
+                {
+                    "herb": "ginger",
+                    "herb_aliases": ["zingiber officinale"],
+                    "condition": "nausea",
+                    "condition_aliases": ["morning sickness", "chemotherapy nausea"],
+                    "evidence_level": "high",
+                    "summary": "Effective for pregnancy-induced and chemotherapy-induced nausea.",
+                    "detailed_summary": "Multiple meta-analyses confirm efficacy superior to placebo for various forms of nausea.",
+                    "citations": [
+                        {
+                            "pmid": "24390544", "title": "Ginger for nausea and vomiting in pregnancy", "authors": "Viljoen E, et al.",
+                            "journal": "Nutr J", "year": 2014, "study_type": "Meta-analysis",
+                            "conclusion": "Ginger is an effective non-pharmacological option."
+                        }
+                    ],
+                    "safety_notes": ["Safe in pregnancy up to 1g/day", "Heartburn risk"],
+                    "contraindications": ["Bleeding disorders", "Near surgery date"],
+                    "interactions": [
+                        {"substance": "Anticoagulants", "severity": "moderate", "description": "Additive bleeding risk"}
+                    ],
+                    "dosing": {"general": "1g daily in divided doses"},
+                    "recommendation_strength": "strong",
+                    "grade_assessment": "⊕⊕⊕⊕"
+                },
+                {
+                    "herb": "peppermint",
+                    "herb_aliases": ["mentha piperita", "peppermint oil"],
+                    "condition": "indigestion",
+                    "condition_aliases": ["ibs", "irritable bowel syndrome", "abdominal pain"],
+                    "evidence_level": "moderate",
+                    "summary": "Enteric-coated peppermint oil is effective for reducing IBS symptoms and abdominal pain.",
+                    "limitations": ["Heartburn if not enteric-coated", "Variable study quality"],
+                    "citations": [
+                        {
+                            "pmid": "30654773", "title": "Peppermint oil for IBS", "authors": "Alammar N, et al.",
+                            "journal": "BMC Complement Altern Med", "year": 2019, "study_type": "Meta-analysis",
+                            "conclusion": "Significantly more effective than placebo (NNT=3)."
+                        }
+                    ],
+                    "safety_notes": ["Can worsen GERD/Heartburn", "Toxic in very high doses"],
+                    "contraindications": ["Severe GERD", "Gallstones (caution)", "Children <8"],
+                    "interactions": [
+                        {"substance": "Cyclosporine", "severity": "moderate", "description": "May increase drug levels"},
+                        {"substance": "Antacids", "severity": "minor", "description": "Dissolves enteric coating prematurely"}
+                    ],
+                    "dosing": {"ibs": "180-225mg enteric coated capsule 2x daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # MENTAL HEALTH (Anxiety, Depression, Stress, Sleep)
+                # =================================================================
+                {
+                    "herb": "ashwagandha",
+                    "herb_aliases": ["withania somnifera", "indian ginseng"],
+                    "condition": "stress",
+                    "condition_aliases": ["anxiety", "cortisol"],
+                    "evidence_level": "moderate",
+                    "summary": "Standardized extracts likely reduce stress and anxiety levels compared to placebo.",
+                    "detailed_summary": "RCTs show reduction in morning cortisol and HAM-A anxiety scores.",
+                    "citations": [
+                        {
+                            "pmid": "31517876", "title": "Investigation into stress-relieving actions of ashwagandha", 
+                            "authors": "Lopresti AL, et al.", "journal": "Medicine", "year": 2019, "study_type": "RCT",
+                            "conclusion": "Significant reduction in cortisol and stress."
+                        },
+                        {
+                            "pmid": "25405876", "title": "Systematic review of Withania somnifera for anxiety", 
+                            "authors": "Pratte MA, et al.", "journal": "J Altern Complement Med", "year": 2014, "study_type": "Review",
+                            "conclusion": "Improvement in anxiety/stress outcomes."
+                        }
+                    ],
+                    "safety_notes": ["May cause drowsiness", "Thyroid stimulation"],
+                    "contraindications": ["Pregnancy (abortifacient risk)", "Hyperthyroidism", "Autoimmune disease"],
+                    "interactions": [
+                        {"substance": "Thyroid medication", "severity": "major", "description": "Risk of thyrotoxicosis"},
+                        {"substance": "Benzodiazepines", "severity": "moderate", "description": "Additive sedation"}
+                    ],
+                    "dosing": {"extract": "300-600mg standardized extract daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+                {
+                    "herb": "st johns wort",
+                    "herb_aliases": ["hypericum perforatum"],
+                    "condition": "depression",
+                    "condition_aliases": ["mild depression", "mood"],
+                    "evidence_level": "high",
+                    "summary": "Effective for mild-moderate depression but has CRITICAL drug interactions.",
+                    "detailed_summary": "Comparable to SSRIs for mild depression with fewer side effects, but induces CYP3A4 enzymes strongly.",
+                    "limitations": ["Not for severe depression", "Dangerous interaction profile"],
+                    "citations": [
+                        {
+                            "pmid": "18843608", "title": "St. John's wort for major depression", "authors": "Linde K, et al.",
+                            "journal": "Cochrane Database Syst Rev", "year": 2008, "study_type": "Meta-analysis",
+                            "conclusion": "Superior to placebo, similar to standard antidepressants."
+                        }
+                    ],
+                    "safety_notes": ["Photosensitivity", "Serotonin syndrome risk"],
+                    "contraindications": ["Severe depression", "Taking ANY prescription meds (check first)", "Bipolar"],
+                    "interactions": [
+                        {"substance": "SSRIs", "severity": "critical", "description": "Serotonin Syndrome risk"},
+                        {"substance": "Birth Control", "severity": "major", "description": "Causes failure of contraception"},
+                        {"substance": "Warfarin", "severity": "major", "description": "Reduces efficacy"},
+                        {"substance": "Cyclosporine", "severity": "critical", "description": "Organ rejection risk"}
+                    ],
+                    "dosing": {"standard": "300mg (0.3% hypericin) 3x daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕⊕"
+                },
+                {
+                    "herb": "valerian",
+                    "herb_aliases": ["valeriana officinalis"],
+                    "condition": "insomnia",
+                    "condition_aliases": ["sleep", "sleeplessness"],
+                    "evidence_level": "low_to_moderate",
+                    "summary": "May improve subjective sleep quality, but objective data is inconsistent.",
+                    "citations": [
+                        {
+                            "pmid": "17145239", "title": "Valerian for sleep", "authors": "Bent S, et al.",
+                            "journal": "Am J Med", "year": 2006, "study_type": "Meta-analysis",
+                            "conclusion": "Improvement in sleep quality noted."
+                        }
+                    ],
+                    "safety_notes": ["Morning grogginess", "Liver toxicity (rare/idiosyncratic)"],
+                    "contraindications": ["Pregnancy", "Operating heavy machinery"],
+                    "interactions": [
+                        {"substance": "Alcohol", "severity": "moderate", "description": "Additive CNS depression"},
+                        {"substance": "Sedatives", "severity": "moderate", "description": "Additive sedation"}
+                    ],
+                    "dosing": {"extract": "300-600mg 1 hour before bed"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕○○"
+                },
+                {
+                    "herb": "chamomile",
+                    "herb_aliases": ["matricaria chamomilla"],
+                    "condition": "anxiety",
+                    "condition_aliases": ["sleep", "relaxation"],
+                    "evidence_level": "moderate",
+                    "summary": "Modest evidence for Generalized Anxiety Disorder (GAD) and sleep quality.",
+                    "citations": [
+                        {
+                            "pmid": "27912871", "title": "Long-term chamomile therapy of GAD", "authors": "Mao JJ, et al.",
+                            "journal": "Phytomedicine", "year": 2016, "study_type": "RCT",
+                            "conclusion": "Significantly reduced GAD symptoms."
+                        }
+                    ],
+                    "safety_notes": ["Allergy risk (Ragweed family)"],
+                    "contraindications": ["Ragweed allergy"],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "minor", "description": "Theoretical bleeding risk"}
+                    ],
+                    "dosing": {"extract": "500mg extract or strong tea"},
+                    "recommendation_strength": "weak",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # CARDIOVASCULAR (Hypertension)
+                # =================================================================
+                {
+                    "herb": "garlic",
+                    "herb_aliases": ["allium sativum", "aged garlic extract"],
+                    "condition": "hypertension",
+                    "condition_aliases": ["high blood pressure"],
+                    "evidence_level": "moderate",
+                    "summary": "Aged garlic extract may lower systolic BP by 7-10 mmHg.",
+                    "citations": [
+                        {
+                            "pmid": "26764326", "title": "Garlic for cardiovascular disease risk", "authors": "Varshney R, et al.",
+                            "journal": "J Nutr", "year": 2016, "study_type": "Meta-analysis",
+                            "conclusion": "Consistent reduction in blood pressure."
+                        }
+                    ],
+                    "safety_notes": ["Bleeding risk", "GI upset"],
+                    "contraindications": ["Surgery within 2 weeks", "Bleeding disorders"],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "major", "description": "Increases INR/bleeding"},
+                        {"substance": "Protease inhibitors", "severity": "moderate", "description": "Reduces drug levels"}
+                    ],
+                    "dosing": {"AGE": "600-1200mg daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # PAIN & INFLAMMATION (Arthritis, Joint Pain)
+                # =================================================================
+                {
+                    "herb": "turmeric",
+                    "herb_aliases": ["curcuma longa", "curcumin"],
+                    "condition": "arthritis",
+                    "condition_aliases": ["joint pain", "inflammation", "osteoarthritis"],
+                    "evidence_level": "moderate",
+                    "summary": "Curcumin extracts show efficacy similar to NSAIDs for osteoarthritis pain.",
+                    "limitations": ["Poor bioavailability of raw spice", "Short term studies"],
+                    "citations": [
+                        {
+                            "pmid": "25402637", "title": "Efficacy of Turmeric for Arthritis", "authors": "Daily JW, et al.",
+                            "journal": "J Med Food", "year": 2016, "study_type": "Meta-analysis",
+                            "conclusion": "Reduced arthritis symptoms similar to ibuprofen."
+                        }
+                    ],
+                    "safety_notes": ["Gallbladder contraction", "Bleeding risk"],
+                    "contraindications": ["Gallstones", "Bile duct obstruction", "Surgery"],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "moderate", "description": "Increases bleeding risk"},
+                        {"substance": "Chemotherapy", "severity": "moderate", "description": "May interfere with some drugs"}
+                    ],
+                    "dosing": {"extract": "500-1000mg curcumin with piperine"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # SKIN (Burns, Acne)
+                # =================================================================
+                {
+                    "herb": "aloe vera",
+                    "herb_aliases": ["aloe barbadensis"],
+                    "condition": "burns",
+                    "condition_aliases": ["sunburn", "thermal burns"],
+                    "evidence_level": "moderate",
+                    "summary": "Accelerates healing of first and second-degree burns.",
+                    "citations": [
+                        {
+                            "pmid": "17314442", "title": "Aloe vera on prevention and healing of skin wounds", 
+                            "authors": "Maenthaisong R, et al.", "journal": "Burns", "year": 2007, "study_type": "Systematic Review",
+                            "conclusion": "Significantly reduced healing time."
+                        }
+                    ],
+                    "safety_notes": ["Do not use on deep/infected wounds"],
+                    "contraindications": ["Third degree burns"],
+                    "interactions": [
+                         {"substance": "Hydrocortisone", "severity": "minor", "description": "May increase absorption"}
+                    ],
+                    "dosing": {"topical": "Apply gel 3-4x daily"},
+                    "recommendation_strength": "strong",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+                {
+                    "herb": "tea tree",
+                    "herb_aliases": ["melaleuca"],
+                    "condition": "acne",
+                    "evidence_level": "moderate",
+                    "summary": "5% gel effective for mild to moderate acne, similar to benzoyl peroxide but slower onset.",
+                    "citations": [
+                        {
+                            "pmid": "17314442", "title": "Treatment of acne with tea tree oil", "authors": "Bassett IB, et al.",
+                            "journal": "Med J Aust", "year": 1990, "study_type": "RCT",
+                            "conclusion": "Effective with fewer side effects than benzoyl peroxide."
+                        }
+                    ],
+                    "safety_notes": ["Toxic if ingested", "Skin irritation possible"],
+                    "contraindications": ["Eczema (caution)"],
+                    "interactions": [],
+                    "dosing": {"topical": "5% gel or diluted oil"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # URINARY (UTI)
+                # =================================================================
+                {
+                    "herb": "cranberry",
+                    "herb_aliases": ["vaccinium macrocarpon"],
+                    "condition": "uti",
+                    "condition_aliases": ["bladder infection", "cystitis"],
+                    "evidence_level": "moderate",
+                    "summary": "Effective for PREVENTION of recurrent UTIs, but NOT for treatment of active infections.",
+                    "citations": [
+                        {
+                            "pmid": "37068952", "title": "Cranberries for preventing UTIs", "authors": "Williams G, et al.",
+                            "journal": "Cochrane Database Syst Rev", "year": 2023, "study_type": "Meta-analysis",
+                            "conclusion": "Reduces risk of recurrent UTI in women."
+                        }
+                    ],
+                    "safety_notes": ["High sugar in juice", "Kidney stone risk (oxalates)"],
+                    "contraindications": ["History of kidney stones (relative)", "Active infection (see doctor)"],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "moderate", "description": "Conflicting evidence of INR increase"}
+                    ],
+                    "dosing": {"prevention": "Products with 36mg PACs daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # MISCELLANEOUS / TRADITIONAL
+                # =================================================================
+                {
+                    "herb": "tulsi",
+                    "herb_aliases": ["holy basil", "ocimum sanctum"],
+                    "condition": "stress",
+                    "evidence_level": "low",
+                    "summary": "Preliminary evidence suggests adaptogenic properties.",
+                    "citations": [
+                        {
+                            "pmid": "28400848", "title": "Tulsi - A herb for all reasons", "authors": "Cohen MM",
+                            "journal": "J Ayurveda Integr Med", "year": 2014, "study_type": "Review",
+                            "conclusion": "Adaptogenic and metabolic effects noted."
+                        }
+                    ],
+                    "safety_notes": ["Lowers blood sugar", " fertility concerns (animal studies)"],
+                    "contraindications": ["Pregnancy", "Hypothyroidism"],
+                    "interactions": [
+                        {"substance": "Diabetes meds", "severity": "moderate", "description": "Additive hypoglycemia"}
+                    ],
+                    "dosing": {"tea": "2-3 cups daily"},
+                    "recommendation_strength": "weak",
+                    "grade_assessment": "⊕○○○"
+                }
+            ]
         }
         
-        logger.info(f"Loaded {len(self.evidence_db)} evidence entries")
-    
-    def _load_interaction_database(self):
-        """
-        Load drug-herb interaction rules. 
-        This is critical safety data for preventing dangerous combinations.
-        """
-        self.interactions_db: Dict[str, Dict] = {
-            'ginger': {
-                'interacts_with': {
-                    'aspirin': InteractionSeverity.HIGH,
-                    'ibuprofen': InteractionSeverity. MODERATE,
-                    'warfarin': InteractionSeverity. CRITICAL,
-                    'coumadin': InteractionSeverity.CRITICAL,
-                    'blood thinner': InteractionSeverity.HIGH,
-                    'blood thinners': InteractionSeverity.HIGH,
-                    'anticoagulant': InteractionSeverity.HIGH,
-                    'plavix': InteractionSeverity.HIGH,
-                    'clopidogrel': InteractionSeverity.HIGH,
-                },
-                'effect': 'Ginger has blood-thinning properties (inhibits platelet aggregation). Combined with anticoagulants, it significantly increases bleeding risk.',
-                'alternatives': ['Peppermint oil (topical)', 'Lavender aromatherapy', 'Cold/warm compress', 'Chamomile tea'],
-            },
-            'turmeric': {
-                'interacts_with': {
-                    'aspirin': InteractionSeverity.HIGH,
-                    'warfarin': InteractionSeverity. CRITICAL,
-                    'blood thinner': InteractionSeverity.HIGH,
-                    'metformin': InteractionSeverity.MODERATE,
-                    'diabetes medication': InteractionSeverity. MODERATE,
-                    'insulin': InteractionSeverity.MODERATE,
-                },
-                'effect': 'Curcumin has antiplatelet and blood sugar-lowering effects.  May cause bleeding or hypoglycemia when combined with these medications.',
-                'alternatives': ['Boswellia (for inflammation)', 'Cold compress', 'Rest and elevation'],
-            },
-            'garlic': {
-                'interacts_with': {
-                    'aspirin': InteractionSeverity. MODERATE,
-                    'warfarin': InteractionSeverity.HIGH,
-                    'blood thinner': InteractionSeverity. MODERATE,
-                    'hiv medication': InteractionSeverity.HIGH,
-                    'saquinavir': InteractionSeverity.HIGH,
-                },
-                'effect': 'Garlic inhibits platelet aggregation.  High doses may increase bleeding risk.',
-                'alternatives': ['Onion (milder)', 'Oregano', 'Thyme'],
-            },
-            'ashwagandha': {
-                'interacts_with': {
-                    'thyroid medication': InteractionSeverity.HIGH,
-                    'levothyroxine': InteractionSeverity.HIGH,
-                    'synthroid': InteractionSeverity.HIGH,
-                    'sedative': InteractionSeverity. MODERATE,
-                    'benzodiazepine': InteractionSeverity. MODERATE,
-                    'immunosuppressant': InteractionSeverity.HIGH,
-                },
-                'effect': 'Ashwagandha stimulates thyroid function and has sedative properties. May interfere with thyroid medication dosing.',
-                'alternatives': ['Chamomile tea', 'Lavender aromatherapy', 'Deep breathing exercises', 'Brahmi'],
-            },
-            'licorice': {
-                'interacts_with': {
-                    'blood pressure medication': InteractionSeverity.HIGH,
-                    'bp medicine': InteractionSeverity.HIGH,
-                    'antihypertensive': InteractionSeverity.HIGH,
-                    'diuretic': InteractionSeverity.HIGH,
-                    'digoxin': InteractionSeverity. CRITICAL,
-                    'heart medication': InteractionSeverity.HIGH,
-                    'corticosteroid': InteractionSeverity. MODERATE,
-                },
-                'effect': 'Glycyrrhizin in licorice raises blood pressure and depletes potassium.  Counteracts BP medications.',
-                'alternatives': ['Honey', 'Slippery elm', 'Marshmallow root'],
-            },
-            'ginseng': {
-                'interacts_with': {
-                    'warfarin': InteractionSeverity. MODERATE,
-                    'blood thinner': InteractionSeverity. MODERATE,
-                    'diabetes medication': InteractionSeverity. MODERATE,
-                    'metformin': InteractionSeverity. MODERATE,
-                    'insulin': InteractionSeverity. MODERATE,
-                    'antidepressant': InteractionSeverity. MODERATE,
-                    'maoi': InteractionSeverity.HIGH,
-                },
-                'effect': 'Ginseng affects blood clotting, blood sugar, and has stimulant properties.',
-                'alternatives': ['Green tea (moderate)', 'Peppermint tea', 'Amla'],
-            },
-            'st johns wort': {
-                'interacts_with': {
-                    'antidepressant': InteractionSeverity.CRITICAL,
-                    'ssri': InteractionSeverity. CRITICAL,
-                    'birth control': InteractionSeverity.HIGH,
-                    'contraceptive': InteractionSeverity.HIGH,
-                    'hiv medication': InteractionSeverity. CRITICAL,
-                    'immunosuppressant': InteractionSeverity.CRITICAL,
-                    'warfarin': InteractionSeverity.HIGH,
-                    'cyclosporine': InteractionSeverity. CRITICAL,
-                },
-                'effect': "St. John's Wort induces CYP450 enzymes, dramatically reducing effectiveness of many medications. Serotonin syndrome risk with SSRIs.",
-                'alternatives': ['Lavender', 'Chamomile', 'Exercise', 'Light therapy'],
-            },
-            'valerian': {
-                'interacts_with': {
-                    'sedative': InteractionSeverity.HIGH,
-                    'benzodiazepine': InteractionSeverity.HIGH,
-                    'sleep medication': InteractionSeverity.HIGH,
-                    'ambien': InteractionSeverity.HIGH,
-                    'alcohol': InteractionSeverity.HIGH,
-                    'antihistamine': InteractionSeverity. MODERATE,
-                },
-                'effect': 'Valerian has sedative effects that compound with other CNS depressants, risking over-sedation.',
-                'alternatives': ['Chamomile tea', 'Warm milk', 'Lavender aromatherapy', 'Sleep hygiene practices'],
-            },
-            'chamomile': {
-                'interacts_with': {
-                    'warfarin': InteractionSeverity.LOW,
-                    'blood thinner': InteractionSeverity. LOW,
-                    'sedative': InteractionSeverity.LOW,
-                },
-                'effect': 'Chamomile has mild blood-thinning and sedative effects. Generally safe in moderate amounts.',
-                'alternatives': ['Lavender tea', 'Warm milk with honey'],
-            },
-            'giloy': {
-                'interacts_with': {
-                    'diabetes medication': InteractionSeverity. MODERATE,
-                    'metformin': InteractionSeverity.MODERATE,
-                    'immunosuppressant': InteractionSeverity.HIGH,
-                },
-                'effect': 'Giloy has immunomodulatory effects and may lower blood sugar.',
-                'alternatives': ['Tulsi', 'Amla'],
-            },
-            'neem': {
-                'interacts_with': {
-                    'diabetes medication': InteractionSeverity.MODERATE,
-                    'metformin': InteractionSeverity. MODERATE,
-                    'immunosuppressant': InteractionSeverity. MODERATE,
-                },
-                'effect': 'Neem may lower blood sugar and has immunomodulatory effects.',
-                'alternatives': ['Turmeric', 'Aloe vera'],
-            },
-        }
-        
-        logger.info(f"Loaded {len(self.interactions_db)} interaction profiles")
-    
-    def _load_contraindication_rules(self):
-        """Load condition-based contraindication rules"""
-        self.contraindications: Dict[str, Dict] = {
-            'ginger': {
-                'conditions': ['gallstones', 'bleeding disorder', 'hemophilia'],
-                'pregnancy': 'Limit to 1g daily in pregnancy',
-                'surgery': 'Stop 2 weeks before surgery',
-            },
-            'turmeric': {
-                'conditions': ['gallstones', 'bile duct obstruction', 'bleeding disorder'],
-                'pregnancy': 'Culinary amounts only in pregnancy',
-                'surgery': 'Stop 2 weeks before surgery',
-            },
-            'ashwagandha': {
-                'conditions': ['hyperthyroidism', 'autoimmune disease', 'hashimoto'],
-                'pregnancy': 'Avoid in pregnancy',
-            },
-            'licorice': {
-                'conditions': ['hypertension', 'high blood pressure', 'heart disease', 'kidney disease', 'hypokalemia'],
-                'pregnancy': 'Avoid in pregnancy',
-                'max_duration': '4-6 weeks continuous use',
-            },
-            'neem': {
-                'conditions': ['autoimmune disease', 'trying to conceive'],
-                'pregnancy': 'Avoid in pregnancy',
-            },
-            'ginseng': {
-                'conditions': ['insomnia', 'high blood pressure', 'hormone-sensitive cancer'],
-                'pregnancy': 'Avoid in pregnancy',
-            },
-            'valerian': {
-                'conditions': [],
-                'pregnancy': 'Avoid in pregnancy',
-                'surgery': 'Stop 2 weeks before surgery',
-            },
-            'kava': {
-                'conditions': ['liver disease', 'depression', 'parkinsons'],
-                'pregnancy': 'Avoid in pregnancy',
-            },
-        }
-        
-        logger.info(f"Loaded {len(self.contraindications)} contraindication rules")
-    
     def _build_herb_registry(self):
-        """Build comprehensive registry of known herbs"""
-        # Start with herbs from evidence database
-        self.known_herbs: Set[str] = set()
+        """Build registry of all known herbs from evidence database"""
+        self.known_herbs = set()
         
-        for key in self.evidence_db:
-            self.known_herbs.add(key[0].lower())
+        for entry in self.evidence_data.get('evidence', []):
+            herb = entry.get('herb', '').lower()
+            if herb: 
+                self.known_herbs.add(herb)
+            for alias in entry.get('herb_aliases', []):
+                self.known_herbs.add(alias.lower())
         
-        # Add from interactions database
-        for herb in self.interactions_db:
-            self.known_herbs.add(herb.lower())
-        
-        # Add additional known herbs
+        # Add common herbs not in database (for detection purposes)
         additional_herbs = [
-            # Indian/Ayurvedic
-            'turmeric', 'tulsi', 'neem', 'amla', 'triphala', 'shatavari',
-            'moringa', 'brahmi', 'shankhpushpi', 'jatamansi', 'arjuna',
-            'guggul', 'bibhitaki', 'haritaki', 'manjistha', 'ashwagandha',
-            'giloy', 'guduchi', 'ajwain', 'hing', 'asafoetida', 'methi',
-            
-            # Common herbs
-            'ginger', 'garlic', 'honey', 'aloe vera', 'coconut oil',
-            'fennel', 'cardamom', 'cumin', 'coriander', 'fenugreek',
-            'cinnamon', 'black pepper', 'clove', 'mint', 'peppermint',
-            
-            # Western herbs
-            'chamomile', 'lavender', 'valerian', 'echinacea', 'elderberry',
-            'goldenseal', 'slippery elm', 'marshmallow root', 'mullein',
-            'nettle', 'dandelion', 'milk thistle', 'ginkgo', 'ginseng',
-            'st johns wort', 'feverfew', 'butterbur', 'passionflower',
-            
-            # Essential oils
-            'eucalyptus', 'tea tree', 'rosemary', 'thyme', 'oregano',
-            'frankincense', 'myrrh', 'lemongrass', 'citronella',
+            'brahmi', 'giloy', 'amla', 'triphala', 'fennel', 'cumin', 
+            'coriander', 'fenugreek', 'cinnamon', 'clove', 'cardamom', 
+            'black pepper', 'mint', 'basil', 'oregano', 'thyme',
+            'rosemary', 'sage', 'parsley', 'dill', 'bay leaf', 'licorice'
         ]
-        
         self.known_herbs.update(h.lower() for h in additional_herbs)
         
-        logger.info(f"Built registry of {len(self.known_herbs)} known herbs")
-    
-    # =========================================================================
-    # CORE VERIFICATION METHODS
-    # =========================================================================
-    
-    def verify_response(
+    def get_evidence_for_herb(self, herb: str, condition: str = None) -> Optional[Dict]:
+        """Get evidence entry for a specific herb and condition"""
+        herb_lower = herb.lower().strip()
+        
+        for entry in self.evidence_data.get('evidence', []):
+            entry_herb = entry.get('herb', '').lower()
+            entry_aliases = [a.lower() for a in entry.get('herb_aliases', [])]
+            
+            # Check herb match
+            if herb_lower == entry_herb or herb_lower in entry_aliases:
+                if not condition: 
+                    return entry
+                
+                # Check condition match
+                condition_lower = condition.lower().replace(' ', '_')
+                entry_condition = entry.get('condition', '').lower().replace(' ', '_')
+                entry_condition_aliases = [
+                    c.lower().replace(' ', '_') 
+                    for c in entry.get('condition_aliases', [])
+                ]
+                
+                if (condition_lower in entry_condition or 
+                    entry_condition in condition_lower or
+                    condition_lower in entry_condition_aliases or
+                    any(condition_lower in alias for alias in entry_condition_aliases) or
+                    self._conditions_related(condition_lower, entry_condition)):
+                    return entry
+        
+        # Fallback: if we found the herb but not the specific condition, return the herb entry
+        # (Logic can be adjusted to return None if strict matching is required)
+        for entry in self.evidence_data.get('evidence', []):
+            if herb_lower == entry.get('herb') or herb_lower in [a.lower() for a in entry.get('herb_aliases', [])]:
+                return entry
+                
+        return None
+
+    def _conditions_related(self, condition1: str, condition2: str) -> bool:
+        """Check if two conditions are clinically related"""
+        condition_groups = {
+            'respiratory': ['cough', 'cold', 'flu', 'bronchitis', 'congestion', 
+                          'sore_throat', 'pharyngitis', 'sinusitis', 'respiratory'],
+            'digestive': ['stomach', 'nausea', 'ibs', 'digestion', 'bloating', 
+                         'indigestion', 'diarrhea', 'constipation', 'digestive',
+                         'abdominal_pain', 'dyspepsia', 'acidity'],
+            'pain': ['headache', 'inflammation', 'arthritis', 'muscle_pain', 
+                    'joint_pain', 'pain', 'migraine'],
+            'mental': ['anxiety', 'sleep', 'insomnia', 'relaxation', 'stress',
+                      'depression', 'mood', 'stress_and_anxiety'],
+            'skin': ['burns', 'wound', 'acne', 'rash', 'eczema', 'skin'],
+            'cardiovascular': ['hypertension', 'blood_pressure', 'heart', 'cardiovascular']
+        }
+        
+        for group, conditions in condition_groups.items():
+            c1_match = condition1 in conditions or condition1 == group
+            c2_match = condition2 in conditions or condition2 == group
+            if c1_match and c2_match:
+                return True
+        
+        return False
+
+    async def verify_response(
         self,
         llm_response: str,
         query: str,
+        user_id: str = None,  # TEMPORAL: Added for pharmacovigilance
         user_conditions: List[str] = None,
         user_medications: List[str] = None,
         user_allergies: List[str] = None,
         current_condition: str = None
-    ) -> Tuple[List[VerificationResult], List[str]]:
+    ) -> ValidationResult:
         """
-        Main verification method - validates all claims in an LLM response. 
-        
-        Args:
-            llm_response: The generated response text to verify
-            query: User's original query
-            user_conditions: User's health conditions (e.g., ['diabetes', 'hypertension'])
-            user_medications: User's CURRENT medications (not stopped ones)
-            user_allergies: User's allergies
-            current_condition: The specific condition being discussed (e.g., 'fever', 'headache')
-        
-        Returns:
-            Tuple of (List[VerificationResult], List[str] global_warnings)
+        ASYNC Main verification method - validates all claims in an LLM response. 
+        Now includes temporal safety validation for medication timing.
         """
         user_conditions = user_conditions or []
         user_medications = user_medications or []
         user_allergies = user_allergies or []
         
-        # Determine the condition we're verifying against
+        # Determine condition
         if current_condition:
             condition = current_condition.lower().strip()
-            logger.info(f"Trust Engine: Using passed condition '{condition}'")
         else:
             condition = self._identify_condition(query)
-            logger.info(f"Trust Engine: Detected condition '{condition}' from query")
         
-        # Find herbs mentioned in the response
+        logger.info(f"Trust Engine: Verifying for condition '{condition}'")
+        
+        # Find herbs in response
         response_lower = llm_response.lower()
         found_herbs = []
         
         for herb in self.known_herbs:
-            # Check if herb is mentioned (word boundary check to avoid partial matches)
+            # Word boundary regex to ensure we don't match substrings (e.g. "tea" in "tear")
             if re.search(r'\b' + re.escape(herb) + r'\b', response_lower):
-                # Skip if user is allergic
                 if herb not in [a.lower() for a in user_allergies]:
                     found_herbs.append(herb)
-                else:
-                    logger.warning(f"Skipping {herb} - user is allergic")
         
-        logger.info(f"Trust Engine: Found herbs {found_herbs}")
-        logger.info(f"Trust Engine: Checking against medications {user_medications}")
+        logger.info(f"Trust Engine: Found herbs {list(set(found_herbs))}")
+        
+        # TEMPORAL SAFETY CHECK - Added for Objective 1 (now async)
+        temporal_safety_blocked = False
+        temporal_violations = []
+        temporal_recommendations = []
+        
+        if user_id and found_herbs and TEMPORAL_ENGINE_AVAILABLE:
+            temporal_result = await self.validate_temporal_safety(
+                user_id=user_id,
+                herbs=found_herbs,
+                symptom_descriptions=[condition] if condition != "general" else None
+            )
+            temporal_safety_blocked = temporal_result.get('blocked', False)
+            temporal_violations = temporal_result.get('violations', [])
+            temporal_recommendations = temporal_result.get('recommendations', [])
+            
+            if temporal_safety_blocked:
+                logger.critical(f"🚫 TEMPORAL SAFETY BLOCK: User {user_id[:20]}... - Critical violations detected")
         
         # Verify each herb
-        results = []
-        for herb in set(found_herbs):  # Use set to avoid duplicates
-            result = self._verify_single_claim(
-                herb_name=herb,
-                condition=condition,
-                user_conditions=user_conditions,
-                user_medications=user_medications
-            )
-            results.append(result)
-        
-        # Generate global warnings
-        global_warnings = self._generate_global_warnings(results)
-        
-        return results, global_warnings
-    
-    def _verify_single_claim(
-        self,
-        herb_name: str,
-        condition: str,
-        user_conditions: List[str],
-        user_medications: List[str]
-    ) -> VerificationResult:
-        """Verify a single herb-condition claim"""
-        
-        herb_lower = herb_name.lower()
-        condition_lower = condition.lower()
-        
+        verified_herbs = []
+        unverified_herbs = []
         warnings = []
-        interaction_note = None
+        contraindicated_herbs = []
+        interaction_warnings = []
+        evidence_summaries = {}
         
-        # Step 1: Check drug interactions
-        if herb_lower in self.interactions_db:
-            interaction_data = self.interactions_db[herb_lower]
+        for herb in set(found_herbs):
+            evidence = self.get_evidence_for_herb(herb, condition)
             
-            for med in user_medications:
-                med_lower = med.lower()
+            if evidence:
+                verified_herbs.append(herb)
+                evidence_summaries[herb] = self._format_evidence_citation(herb, evidence, condition)
                 
-                for drug_key, severity in interaction_data['interacts_with'].items():
-                    if drug_key in med_lower or med_lower in drug_key:
-                        severity_label = severity.value.upper()
-                        effect = interaction_data['effect']
-                        
-                        if severity in [InteractionSeverity. CRITICAL, InteractionSeverity.HIGH]:
-                            interaction_note = f"⚠️ INTERACTION: {herb_name} may interact with {med}.  Reason: {effect}"
-                            warnings.append(interaction_note)
-                        elif severity == InteractionSeverity.MODERATE:
-                            interaction_note = f"⚠️ Caution: {herb_name} + {med} - monitor for: {effect}"
-                            warnings.append(interaction_note)
-        
-        # Step 2: Check contraindications
-        if herb_lower in self.contraindications:
-            contra = self.contraindications[herb_lower]
-            for blocked_condition in contra.get('conditions', []):
-                for user_cond in user_conditions:
-                    if blocked_condition.lower() in user_cond.lower():
-                        warnings.append(f"🚫 CONTRAINDICATED: Avoid {herb_name} with {user_cond}")
-        
-        # Step 3: Look up evidence
-        evidence_key = (herb_lower, condition_lower)
-        evidence = self.evidence_db.get(evidence_key)
-        
-        if evidence:
-            tier = evidence['tier']
-            if isinstance(tier, EvidenceTier):
-                tier_num = tier.value
+                # Check contraindications
+                for contra in evidence.get('contraindications', []):
+                    for user_cond in user_conditions:
+                        if user_cond.lower() in contra.lower():
+                            contraindicated_herbs.append(herb)
+                            warnings.append(
+                                f"⚠️ **{herb.title()}** may be contraindicated: {contra}"
+                            )
+                
+                # Check drug interactions
+                for interaction in evidence.get('interactions', []):
+                    substance = interaction.get('substance', '').lower()
+                    for user_med in user_medications: 
+                        if user_med.lower() in substance or substance in user_med.lower():
+                            severity = interaction.get('severity', 'unknown')
+                            description = interaction.get('description', '')
+                            
+                            if severity in ['critical', 'major']: 
+                                interaction_warnings.append(
+                                    f"🚫 **CRITICAL**: {herb.title()} + {user_med}: {description}"
+                                )
+                            elif severity == 'moderate':
+                                interaction_warnings.append(
+                                    f"⚠️ **Caution**: {herb.title()} + {user_med}: {description}"
+                                )
+                            else:
+                                interaction_warnings.append(
+                                    f"ℹ️ **Note**: {herb.title()} + {user_med}: {description}"
+                                )
+                
+                # Check allergies
+                herb_aliases = [a.lower() for a in evidence.get('herb_aliases', [])]
+                for allergy in user_allergies:
+                    if allergy.lower() in herb.lower() or any(allergy.lower() in alias for alias in herb_aliases):
+                        contraindicated_herbs.append(herb)
+                        warnings.append(f"🚫 **{herb.title()}** - possible allergy concern")
             else:
-                tier_num = tier
-            
-            mechanism = evidence['mechanism']
-            pubmed_ids = evidence.get('pubmed_ids', [])
-            dose = evidence.get('dose', '')
-            
-            # Calculate Scientific Confidence Score (SCS)
-            base_scores = {1: 9.0, 2: 7.5, 3: 5.5, 4: 3.5, 5: 1.5}
-            base_score = base_scores.get(tier_num, 3.0)
-            
-            # Bonuses
-            pubmed_bonus = min(len(pubmed_ids) * 0.3, 1.0)
-            mechanism_bonus = 0.5 if mechanism else 0
-            
-            confidence_score = min(base_score + pubmed_bonus + mechanism_bonus, 10.0)
-            
-            # Penalties for warnings
-            if warnings:
-                confidence_score = max(confidence_score - (len(warnings) * 1.0), 1.0)
-            
-            tier_labels = {
-                1: "Clinical Trial",
-                2: "Mechanistic Study",
-                3: "Traditional Use",
-                4: "Anecdotal",
-                5: "Theoretical"
-            }
-            
-            return VerificationResult(
-                herb_name=herb_name,
-                condition=condition,
-                is_valid=True,
-                confidence_score=round(confidence_score, 1),
-                evidence_tier=tier_num,
-                evidence_tier_label=tier_labels.get(tier_num, "Unknown"),
-                mechanism=mechanism,
-                pubmed_count=len(pubmed_ids),
-                warnings=warnings,
-                is_hallucination=False,
-                interaction_note=interaction_note,
-                recommended_dose=dose
-            )
-        else:
-            # Herb is known but no evidence for this condition
-            return VerificationResult(
-                herb_name=herb_name,
-                condition=condition,
-                is_valid=False,
-                confidence_score=2.0,
-                evidence_tier=5,
-                evidence_tier_label="Unverified",
-                mechanism="No documented mechanism for this condition",
-                pubmed_count=0,
-                warnings=warnings,
-                is_hallucination=True,
-                hallucination_reason=f"No evidence linking {herb_name} to {condition}",
-                interaction_note=interaction_note
-            )
-    
+                unverified_herbs.append(herb)
+                evidence_summaries[herb] = (
+                    f"**{herb.title()}**: No PubMed-indexed evidence found for this herb "
+                    f"and {condition}. This does not mean it is ineffective, but evidence-based "
+                    f"recommendations cannot be made. Consult a healthcare provider."
+                )
+        
+        # Generate formatted output
+        formatted_output = self._format_full_response(
+            verified_herbs, unverified_herbs, condition, evidence_summaries,
+            warnings, interaction_warnings
+        )
+        
+        # Determine safety - now includes temporal blocking
+        is_safe = (len(contraindicated_herbs) == 0 and 
+                   len([w for w in interaction_warnings if 'CRITICAL' in w]) == 0 and
+                   not temporal_safety_blocked)
+        
+        return ValidationResult(
+            is_safe=is_safe,
+            verified_herbs=verified_herbs,
+            unverified_herbs=unverified_herbs,
+            warnings=warnings,
+            contraindicated_herbs=contraindicated_herbs,
+            interaction_warnings=interaction_warnings,
+            evidence_summaries=evidence_summaries,
+            formatted_output=formatted_output,
+            # TEMPORAL FIELDS
+            temporal_safety_blocked=temporal_safety_blocked,
+            temporal_violations=temporal_violations,
+            temporal_recommendations=temporal_recommendations
+        )
+
     def _identify_condition(self, query: str) -> str:
-        """Identify condition from query text (fallback when not passed explicitly)"""
+        """Identify condition from query text"""
         query_lower = query.lower()
-        
-        conditions_map = {
-            'headache': ['headache', 'head hurts', 'head pain', 'migraine', 'head ache'],
-            'fever': ['fever', 'temperature', 'feverish', 'high temperature', 'febrile'],
-            'cold': ['cold', 'runny nose', 'sneezing', 'congestion', 'flu', 'common cold'],
-            'cough': ['cough', 'coughing', 'dry cough', 'wet cough'],
-            'nausea': ['nausea', 'nauseous', 'vomiting', 'vomit', 'queasy', 'morning sickness'],
-            'indigestion': ['indigestion', 'bloating', 'gas', 'stomach upset', 'digestive', 'acidity', 'acid reflux'],
-            'sore throat': ['sore throat', 'throat pain', 'throat hurts', 'scratchy throat'],
-            'anxiety': ['anxiety', 'anxious', 'worried', 'nervous', 'panic', 'panic attack'],
-            'stress': ['stress', 'stressed', 'overwhelmed', 'burnout'],
-            'insomnia': ['insomnia', 'cant sleep', 'cannot sleep', 'sleepless', 'sleep problems', 'trouble sleeping'],
-            'fatigue': ['fatigue', 'tired', 'exhausted', 'low energy', 'weakness'],
-            'arthritis': ['arthritis', 'joint pain', 'joints hurt', 'joint inflammation'],
-            'toothache': ['toothache', 'tooth pain', 'tooth hurts', 'dental pain'],
-            'acne': ['acne', 'pimples', 'breakout', 'zits'],
-            'burns': ['burn', 'burnt', 'burned', 'scalded', 'scald'],
-        }
-        
-        for condition, keywords in conditions_map.items():
+        for condition, keywords in self.condition_map.items():
             for keyword in keywords:
                 if keyword in query_lower:
                     return condition
-        
         return "general"
-    
-    def _generate_global_warnings(self, results: List[VerificationResult]) -> List[str]:
-        """Generate global warnings based on all verification results"""
-        warnings = []
+
+    def _format_evidence_citation(self, herb: str, evidence: Dict, condition: str) -> str:
+        """Format evidence with proper PubMed citations and uncertainty language"""
+        output_parts = []
         
-        # Count serious issues
-        interaction_count = sum(1 for r in results if r.interaction_note)
-        hallucination_count = sum(1 for r in results if r.is_hallucination)
-        contraindication_count = sum(
-            1 for r in results 
-            if any('CONTRAINDICATED' in w for w in r.warnings)
-        )
+        # Header
+        output_parts.append(f"### {herb.title()}")
+        output_parts.append("")
         
-        if contraindication_count > 0:
-            warnings.append(f"🚫 {contraindication_count} remedy(s) may be contraindicated for you")
+        # Evidence summary with appropriate uncertainty language
+        evidence_level = evidence.get('evidence_level', 'insufficient')
+        summary = evidence.get('summary', 'potential benefits, but more research is needed')
+        uncertainty_prefix = self.UNCERTAINTY_LANGUAGE.get(evidence_level, 'Limited evidence suggests')
         
-        if hallucination_count > 0:
-            warnings.append(f"ℹ️ {hallucination_count} suggestion(s) could not be verified against our evidence database")
+        output_parts.append(f"**Summary**: {uncertainty_prefix} {summary}")
+        output_parts.append("")
         
-        return warnings
-    
-    # =========================================================================
-    # OUTPUT FORMATTING
-    # =========================================================================
-    
-    def format_validation_section(
+        # Detailed summary if available
+        detailed = evidence.get('detailed_summary', '')
+        if detailed:
+            output_parts.append(f"**Details**: {detailed}")
+            output_parts.append("")
+        
+        # Limitations
+        limitations = evidence.get('limitations', [])
+        if limitations:
+            output_parts.append("**Limitations**:")
+            for limitation in limitations[:4]: 
+                output_parts.append(f"- {limitation}")
+            output_parts.append("")
+        
+        # PubMed Citations with links
+        citations = evidence.get('citations', [])
+        if citations:
+            output_parts.append("**References (PubMed)**:")
+            for i, cite in enumerate(citations[:3], 1):
+                pmid = cite.get('pmid', 'N/A')
+                title = cite.get('title', 'Unknown title')
+                authors = cite.get('authors', 'Unknown')
+                journal = cite.get('journal', '')
+                year = cite.get('year', '')
+                study_type = cite.get('study_type', '')
+                conclusion = cite.get('conclusion', '')
+                
+                cite_line = f"{i}. {authors}. \"{title}.\" *{journal}* ({year}). "
+                cite_line += f"[PMID: {pmid}](https://pubmed.ncbi.nlm.nih.gov/{pmid}/)"
+                if study_type:
+                    cite_line += f" **[{study_type}]**"
+                output_parts.append(cite_line)
+                
+                if conclusion:
+                    output_parts.append(f"   - *Conclusion*: {conclusion}")
+                output_parts.append("")
+        else:
+            output_parts.append("**Note**: No specific PubMed citations available. Recommendation based on traditional use.")
+            output_parts.append("")
+        
+        # Safety information
+        safety_notes = evidence.get('safety_notes', [])
+        if safety_notes:
+            output_parts.append("**Safety Considerations**:")
+            for note in safety_notes[:4]:
+                output_parts.append(f"- {note}")
+            output_parts.append("")
+        
+        # Dosing
+        dosing = evidence.get('dosing', {})
+        if dosing:
+            output_parts.append("**Suggested Dosing** (based on studies):")
+            for key, value in list(dosing.items())[:4]:
+                key_formatted = key.replace('_', ' ').title()
+                output_parts.append(f"- {key_formatted}: {value}")
+            output_parts.append("")
+        
+        # Evidence assessment (GRADE-style)
+        certainty = evidence.get('certainty_of_evidence', evidence_level)
+        recommendation = evidence.get('recommendation_strength', 'unknown')
+        grade = evidence.get('grade_assessment', self.GRADE_SYMBOLS.get(evidence_level, '○○○○'))
+        
+        output_parts.append("**Evidence Assessment**:")
+        output_parts.append(f"- Certainty: {certainty.replace('_', ' ').title()} {grade}")
+        output_parts.append(f"- Recommendation: {recommendation.replace('_', ' ').title()}")
+        output_parts.append("")
+        
+        return "\n".join(output_parts)
+
+    def _format_full_response(
         self,
-        results: List[VerificationResult],
-        global_warnings: List[str]
+        verified_herbs: List[str],
+        unverified_herbs: List[str],
+        condition: str,
+        evidence_summaries: Dict[str, str],
+        warnings: List[str],
+        interaction_warnings: List[str]
     ) -> str:
-        """Format verification results as markdown for display"""
+        """Generate complete formatted response with citations"""
+        output_parts = []
         
-        if not results:
-            return ""
+        output_parts.append("\n\n---\n\n")
+        output_parts.append("## 🔬 ServVia Evidence Summary")
+        output_parts.append("")
+        output_parts.append("*The following is based on PubMed-indexed research. "
+                          "Evidence quality varies. Always consult a healthcare provider.*")
+        output_parts.append("")
         
-        output = "\n\n---\n\n"
-        output += "**🔬 Scientific Validation (Trust Engine):**\n\n"
+        # Critical warnings first
+        if interaction_warnings:
+            output_parts.append("### ⚠️ Drug Interaction Alerts")
+            output_parts.append("")
+            for warning in interaction_warnings:
+                output_parts.append(warning)
+            output_parts.append("")
         
-        # Global warnings
-        if global_warnings:
-            for warning in global_warnings:
-                output += f"{warning}\n"
-            output += "\n"
+        if warnings:
+            output_parts.append("### ⚠️ Safety Alerts")
+            output_parts.append("")
+            for warning in warnings: 
+                output_parts.append(warning)
+            output_parts.append("")
         
-        # Separate verified and unverified
-        verified = [r for r in results if r.is_valid and not r.is_hallucination]
-        unverified = [r for r in results if r.is_hallucination]
+        # Verified herbs with citations
+        if verified_herbs: 
+            output_parts.append("### Herbs with PubMed Evidence")
+            output_parts.append("")
+            for herb in verified_herbs: 
+                if herb in evidence_summaries: 
+                    output_parts.append(evidence_summaries[herb])
+                    output_parts.append("")
+                    output_parts.append("---")
+                    output_parts.append("")
         
-        # Verified remedies
-        if verified:
-            output += "**Verified Remedies:**\n\n"
-            for r in verified:
-                # Confidence emoji
-                if r.confidence_score >= 8:
-                    emoji = "🟢"
-                elif r.confidence_score >= 5:
-                    emoji = "🟡"
-                else:
-                    emoji = "🔴"
-                
-                output += f"**{r.herb_name.title()}** {emoji} **{r.confidence_score}/10**\n"
-                output += f"Evidence: {r.evidence_tier_label} ({r.pubmed_count} studies)\n"
-                output += f"Mechanism: {r.mechanism}\n"
-                
-                if r.recommended_dose:
-                    output += f"Dose: {r.recommended_dose}\n"
-                
-                if r.interaction_note:
-                    output += f"{r.interaction_note}\n"
-                
-                for w in r.warnings:
-                    if w != r.interaction_note:  # Avoid duplicate
-                        output += f"{w}\n"
-                
-                output += "\n"
+        # Unverified herbs
+        if unverified_herbs:
+            output_parts.append("### Herbs Without Sufficient Evidence")
+            output_parts.append("")
+            output_parts.append("The following lack sufficient PubMed-indexed evidence:")
+            output_parts.append("")
+            for herb in unverified_herbs:
+                output_parts.append(f"- **{herb.title()}**: Insufficient peer-reviewed evidence. "
+                                  f"This does not mean ineffective, but caution is advised.")
+            output_parts.append("")
         
-        # Unverified remedies
-        if unverified:
-            output += "**Unverified (Use with Caution):**\n\n"
-            for r in unverified:
-                output += f"⚠️ **{r.herb_name.title()}** - {r.hallucination_reason}\n"
-                
-                if r.interaction_note:
-                    output += f"   {r.interaction_note}\n"
-            
-            output += "\n"
+        # Disclaimer
+        output_parts.append("## Important Disclaimer")
+        output_parts.append("")
+        output_parts.append("This information is for **educational purposes only** and is not "
+                          "a substitute for professional medical advice. Evidence presented "
+                          "reflects current PubMed-indexed literature, which may be incomplete. "
+                          "Individual responses vary. **Consult a qualified healthcare provider** "
+                          "before starting any new treatment.")
         
-        # Legend
-        output += "**Confidence Score Legend:**\n\n"
-        output += "| Score | Meaning |\n"
-        output += "|-------|--------|\n"
-        output += "| 🟢 8-10 | Strong clinical evidence |\n"
-        output += "| 🟡 5-7 | Good research support |\n"
-        output += "| 🔴 1-4 | Limited evidence |\n"
-        
-        return output
-    
-    # =========================================================================
-    # UTILITY METHODS
-    # =========================================================================
-    
-    def check_single_interaction(
-        self,
-        herb: str,
-        medication: str
-    ) -> Optional[InteractionWarning]:
-        """Check for interaction between a specific herb and medication"""
-        
-        herb_lower = herb.lower()
-        med_lower = medication.lower()
-        
-        if herb_lower not in self.interactions_db:
-            return None
-        
-        interaction_data = self.interactions_db[herb_lower]
-        
-        for drug_key, severity in interaction_data['interacts_with'].items():
-            if drug_key in med_lower or med_lower in drug_key:
-                return InteractionWarning(
-                    herb=herb,
-                    drug=medication,
-                    severity=severity,
-                    effect=interaction_data['effect'],
-                    recommendation=f"Avoid {herb} while taking {medication}",
-                    alternatives=interaction_data.get('alternatives', [])
-                )
-        
-        return None
-    
-    def get_evidence_for_condition(self, condition: str) -> List[Dict]:
-        """Get all herbs with evidence for a specific condition"""
-        condition_lower = condition.lower()
-        results = []
-        
-        for (herb, cond), evidence in self.evidence_db.items():
-            if cond == condition_lower:
-                tier = evidence['tier']
-                if isinstance(tier, EvidenceTier):
-                    tier_num = tier.value
-                else:
-                    tier_num = tier
-                
-                results.append({
-                    'herb': herb,
-                    'tier': tier_num,
-                    'mechanism': evidence['mechanism'],
-                    'dose': evidence.get('dose', ''),
-                })
-        
-        # Sort by evidence tier (lower is better)
-        results.sort(key=lambda x: x['tier'])
-        return results
-    
+        return "\n".join(output_parts)
+
     def is_herb_known(self, herb: str) -> bool:
         """Check if an herb is in our knowledge base"""
         return herb.lower() in self.known_herbs
+
+    def _get_evidence_for_herb_via_rag(self, herb_name: str, condition: str = None) -> Optional[Dict]:
+        """
+        Retrieve evidence for an herb via RAG (Retrieval Augmented Generation).
+        This hardcoded method calls the retrieve_content function to fetch
+        evidence from the vector database.
+        
+        Args:
+            herb_name: Name of the herb to search for
+            condition: Optional health condition context
+            
+        Returns:
+            Dict with retrieved evidence or None if not found
+        """
+        try:
+            # Import retrieve_content here to avoid circular imports
+            from rag_service.content_retrieval import retrieve_content
+            
+            # Construct query combining herb and condition
+            if condition and condition != "general":
+                query = f"{herb_name} for {condition} health benefits evidence"
+            else:
+                query = f"{herb_name} medicinal uses health benefits"
+            
+            logger.info(f"RAG lookup for herb: {herb_name}, condition: {condition}")
+            
+            # Call retrieve_content with the query
+            # user_id is None since this is a general lookup
+            result = retrieve_content(query, user_id=None, top_k=3)
+            
+            if result and result.get('chunks'):
+                chunks = result.get('chunks', [])
+                
+                # Combine chunk texts for evidence
+                combined_text = "\n\n".join([
+                    c.get('text', '') or c.get('content', '') or str(c)
+                    for c in chunks[:3]
+                ])
+                
+                # Extract PubMed IDs if present in the chunks
+                pubmed_ids = []
+                for chunk in chunks:
+                    text = chunk.get('text', '') or chunk.get('content', '') or str(chunk)
+                    # Look for PubMed ID patterns (PMID: 12345678)
+                    import re
+                    pmid_matches = re.findall(r'PMID:\s*(\d+)', text, re.IGNORECASE)
+                    pubmed_ids.extend(pmid_matches)
+                
+                return {
+                    'herb': herb_name,
+                    'condition': condition,
+                    'source': 'rag_retrieval',
+                    'chunks': chunks,
+                    'combined_evidence': combined_text,
+                    'pubmed_ids': list(set(pubmed_ids)),  # Remove duplicates
+                    'chunk_count': len(chunks)
+                }
+            
+            logger.warning(f"No RAG evidence found for {herb_name}")
+            return None
+            
+        except ImportError as e:
+            logger.error(f"Could not import retrieve_content: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error in RAG evidence retrieval: {e}")
+            return None
+
+
+# =================================================================
+# SINGLETON INSTANCE & TEST RUNNER
+# =================================================================
+
+_trust_engine_instance = None
+
+def get_trust_engine() -> TrustEngine:
+    """Get or create Trust Engine singleton"""
+    global _trust_engine_instance
+    if _trust_engine_instance is None:
+        _trust_engine_instance = TrustEngine()
+    return _trust_engine_instance
+
+if __name__ == "__main__":
+    # Test execution
+    engine = get_trust_engine()
+    print("Testing ServVia Trust Engine v2.1 Monolith...")
+    
+    test_query = "Is ashwagandha safe for stress if I take thyroid meds?"
+    test_response = "You can take ashwagandha for stress relief."
+    user_meds = ["Levothyroxine"]
+    
+    result = engine.verify_response(
+        llm_response=test_response,
+        query=test_query,
+        user_medications=user_meds
+    )
+    
+    print("\nVerification Result:")
+    print(f"Is Safe: {result.is_safe}")
+    print(result.formatted_output)

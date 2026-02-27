@@ -10,6 +10,20 @@ from typing import List, Dict, Optional, Set
 from enum import Enum
 
 
+class InteractionTiming(Enum):
+    """
+    Timing classification for drug-herb interactions.
+    Defines when interactions occur relative to administration.
+    """
+    IMMEDIATE = "immediate"              # Within 1 hour
+    DELAYED_1HR = "delayed_1hr"        # 1-4 hours
+    DELAYED_4HR = "delayed_4hr"        # 4-12 hours
+    DELAYED_12HR = "delayed_12hr"      # 12-24 hours
+    CUMULATIVE = "cumulative"          # Builds up over days/weeks
+    TIME_DEPENDENT = "time_dependent"  # Specific time of day (e.g., morning)
+    WASHOUT_PERIOD = "washout_period"  # Interaction persists after discontinuation
+
+
 class EvidenceTier(Enum):
     """Evidence hierarchy based on scientific rigor"""
     TIER_1_CLINICAL = 1      # Randomized Clinical Trials, Meta-analyses
@@ -140,10 +154,41 @@ class ContraindicationRule:
 
 
 @dataclass
+class TemporalContraindicationRule:
+    """
+    Temporal contraindication rules with timing constraints.
+    Extends standard contraindications with temporal safety windows.
+    """
+    herb_name: str
+    condition: str
+    severity: SafetyLevel
+    reason: str
+    source: str
+    
+    # TEMPORAL CONSTRAINTS
+    temporal_trigger: str  # "acute_symptom", "medication_stabilization", "washout_period"
+    min_duration_days: Optional[int] = None  # Condition must persist this long
+    max_duration_days: Optional[int] = None  # Only applies within this window
+    time_since_onset_days: Optional[int] = None  # Days since symptom/medication started
+    requires_chronic_status: bool = False  # Only applies if condition is chronic (>30 days)
+    medication_context: Optional[str] = None  # Specific medication triggering this rule
+    safety_window_description: str = ""  # Human-readable guidance
+    
+    def applies_to_acuity(self, days: int) -> bool:
+        """Check if this rule applies given symptom duration in days."""
+        if self.min_duration_days and days < self.min_duration_days:
+            return False
+        if self.max_duration_days and days > self.max_duration_days:
+            return False
+        return True
+
+
+@dataclass
 class DrugInteractionRule:
     """
     Explicit rules for herb-drug interactions.
     Critical for patient safety.
+    Includes temporal fields for timing-based interactions.
     """
     herb_name: str
     drug_class: str
@@ -152,6 +197,16 @@ class DrugInteractionRule:
     severity: SafetyLevel
     reason: str
     source: str
+    
+    # TEMPORAL FIELDS - Added for Objective 1: Temporal Neurosymbolic Reasoning
+    interaction_timing: InteractionTiming = None
+    onset_time_hours: Optional[float] = None  # When interaction typically begins
+    peak_interaction_window: Optional[str] = None  # e.g., "2-4 hours post-dose"
+    duration_of_concern_hours: Optional[float] = None  # How long interaction lasts
+    washout_period_days: int = 0  # Days herb must be stopped before safe with drug
+    requires_temporal_separation: bool = False  # Must separate by time window
+    temporal_separation_hours: Optional[int] = None  # Minimum hours between doses
+    medication_stabilization_days: Optional[int] = None  # Days on med before herb safe
 
 
 class KnowledgeGraphSchema:

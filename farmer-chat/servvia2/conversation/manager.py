@@ -18,6 +18,9 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
 
+# Async support for Django ORM
+from asgiref.sync import sync_to_async
+
 logger = logging.getLogger(__name__)
 
 # Try to use Django cache for persistence
@@ -92,6 +95,17 @@ class ConversationManager:
         "i'm using", 'i am on', "i'm on", 'prescribed', 'started taking',
         'doctor gave', 'put me on', 'been taking'
     ]
+    
+    # TEMPORAL KEYWORDS - For Objective 1: Extract medication start/stop dates
+    TEMPORAL_KEYWORDS = {
+        'days': r'(\d+)\s*days?\s*(ago|back|since)',
+        'weeks': r'(\d+)\s*weeks?\s*(ago|back|since)',
+        'months': r'(\d+)\s*months?\s*(ago|back|since)',
+        'yesterday': r'yesterday',
+        'today': r'today',
+        'last_week': r'last\s*week',
+        'recently': r'recently|just\s*started|just\s*stopped',
+    }
     
     # Health conditions to track
     CONDITION_KEYWORDS = {
@@ -375,6 +389,158 @@ class ConversationManager:
             logger.info(f"Context updated for {user_id[:20]}.. .: +{len(changes['added'])} -{len(changes['removed'])}")
         
         return changes
+    
+    def extract_temporal_entities(self, query: str) -> Dict[str, Optional[int]]:
+        """
+        Extract temporal information from query (days/weeks/months ago).
+        Returns dict with 'days_ago' if found.
+        """
+        import re
+        query_lower = query.lower()
+        
+        # Check for days
+        match = re.search(self.TEMPORAL_KEYWORDS['days'], query_lower)
+        if match:
+            return {'days_ago': int(match.group(1)), 'unit': 'days'}
+        
+        # Check for weeks
+        match = re.search(self.TEMPORAL_KEYWORDS['weeks'], query_lower)
+        if match:
+            return {'days_ago': int(match.group(1)) * 7, 'unit': 'weeks'}
+        
+        # Check for months
+        match = re.search(self.TEMPORAL_KEYWORDS['months'], query_lower)
+        if match:
+            return {'days_ago': int(match.group(1)) * 30, 'unit': 'months'}
+        
+        # Check for yesterday
+        if re.search(self.TEMPORAL_KEYWORDS['yesterday'], query_lower):
+            return {'days_ago': 1, 'unit': 'days'}
+        
+        # Check for today
+        if re.search(self.TEMPORAL_KEYWORDS['today'], query_lower):
+            return {'days_ago': 0, 'unit': 'days'}
+        
+        # Check for last week
+        if re.search(self.TEMPORAL_KEYWORDS['last_week'], query_lower):
+            return {'days_ago': 7, 'unit': 'days'}
+        
+        # Check for recently/just started
+        if re.search(self.TEMPORAL_KEYWORDS['recently'], query_lower):
+            return {'days_ago': 3, 'unit': 'days', 'approximate': True}
+        
+        return {}
+    
+    def _sync_update_medication_timeline(self, user_id: str, query: str, 
+                                         is_start_context: bool, is_stop_context: bool,
+                                         temporal: Dict, query_lower: str) -> Dict:
+        """
+        SYNC helper for medication timeline DB operations.
+        This function runs in a thread pool via sync_to_async.
+        """
+        from user_profile.models import UserProfile, MedicationHistory
+        from django.utils import timezone
+        
+        result = {'created': [], 'updated': []}
+        
+        user = UserProfile.objects.get(email=user_id)
+        
+        if temporal and (is_start_context or is_stop_context):
+            days_ago = temporal.get('days_ago', 0)
+            event_date = timezone.now() - timedelta(days=days_ago)
+            
+            for med_name, keywords in self.MEDICATION_KEYWORDS.items():
+                for keyword in keywords:
+                    if keyword in query_lower:
+                        med_display_name = keyword.title()
+                        
+                        if is_start_context:
+                            existing = MedicationHistory.objects.filter(
+                                user=user,
+                                medication_name__iexact=med_display_name,
+                                status='active'
+                            ).first()
+                            
+                            if not existing:
+                                MedicationHistory.objects.create(
+                                    user=user,
+                                    medication_name=med_display_name,
+                                    generic_name=med_name,
+                                    dosage='unknown',
+                                    frequency='unknown',
+                                    start_date=event_date,
+                                    status='active'
+                                )
+                                result['created'].append({
+                                    'medication': med_display_name,
+                                    'start_date': event_date.isoformat(),
+                                    'days_ago': days_ago
+                                })
+                        
+                        elif is_stop_context:
+                            active_med = MedicationHistory.objects.filter(
+                                user=user,
+                                medication_name__iexact=med_display_name,
+                                status='active'
+                            ).first()
+                            
+                            if active_med:
+                                active_med.status = 'discontinued'
+                                active_med.stop_date = event_date
+                                active_med.save()
+                                result['updated'].append({
+                                    'medication': med_display_name,
+                                    'stop_date': event_date.isoformat(),
+                                    'days_ago': days_ago
+                                })
+                        
+                        break
+        
+        return result
+    
+    async def update_medication_timeline(self, user_id: str, query: str) -> Dict:
+        """
+        ASYNC wrapper: Update MedicationHistory based on temporal entities in query.
+        Creates new records for 'started taking' medications.
+        Updates stop_date for 'stopped' medications.
+        """
+        result = {'created': [], 'updated': []}
+        
+        try:
+            from user_profile.models import UserProfile, MedicationHistory
+            
+            query_lower = query.lower()
+            
+            # Check if this is a START context
+            is_start_context = any(kw in query_lower for kw in ['started taking', 'started', 'began', 'prescribed'])
+            
+            # Check if this is a STOP context
+            is_stop_context = any(kw in query_lower for kw in self.REMOVAL_KEYWORDS)
+            
+            # Extract temporal info (this is non-blocking regex, can stay sync)
+            temporal = self.extract_temporal_entities(query)
+            
+            if temporal and (is_start_context or is_stop_context):
+                # Run DB operations in thread pool
+                result = await sync_to_async(self._sync_update_medication_timeline)(
+                    user_id, query, is_start_context, is_stop_context, temporal, query_lower
+                )
+                
+                if result['created']:
+                    for item in result['created']:
+                        logger.info(f"� Created MedicationHistory: {item['medication']} started {item['days_ago']} days ago for {user_id[:20]}...")
+                if result['updated']:
+                    for item in result['updated']:
+                        logger.info(f"🛑 Updated MedicationHistory: {item['medication']} stopped {item['days_ago']} days ago for {user_id[:20]}...")
+        
+        except UserProfile.DoesNotExist:
+            logger.warning(f"User not found for medication timeline: {user_id}")
+        except ImportError as e:
+            logger.error(f"Cannot import models for medication timeline: {e}")
+        except Exception as e:
+            logger.error(f"Error updating medication timeline: {e}")
+        
+        return result
     
     def get_current_condition(self, user_id: str) -> Optional[str]:
         """Get the most recently discussed condition"""

@@ -167,3 +167,21 @@ cython_debug/
 
 # Virtual environment directory
 .myenv
+
+# Database backups
+db.sqlite3.*
+*.backup*
+
+# Media / user uploads
+media/
+
+# Parent directory OS files
+../.DS_Store
+
+# Credentials / keys
+*.key
+*.pem
+*.credentials
+
+# Gemini / agent artifacts
+.gemini/

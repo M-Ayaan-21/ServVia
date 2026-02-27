@@ -16,6 +16,14 @@ import re
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
+# Import Trust Engine for temporal safety validation
+try:
+    from servvia2.trust_engine.engine import get_trust_engine
+    TRUST_ENGINE_AVAILABLE = True
+except ImportError:
+    TRUST_ENGINE_AVAILABLE = False
+    logging.warning("Trust Engine not available - temporal safety checks disabled")
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,28 +61,31 @@ class ServViaAgenticRAG:
             4: ['may help', 'some people find', 'anecdotal', 'reported to'],
         }
     
-    def process(
+    async def process(
         self,
         query: str,
         retrieved_chunks: List[Dict],
         user_name: str = "there",
+        user_id: str = None,  # TEMPORAL: Added for pharmacovigilance
         allergies: List[str] = None,
         medical_conditions: List[str] = None,
         location: Dict = None
     ) -> Dict:
         """
-        Main Agentic RAG processing pipeline. 
+        Main Agentic RAG processing pipeline with Temporal Safety Gate.
         
         Args:
             query: User's health query
             retrieved_chunks: Content from Farmstack vector DB
             user_name: User's name for personalization
+            user_id: User email for temporal safety validation
             allergies: User's known allergies
             medical_conditions: User's medical conditions
             location: User's location for seasonal context
         
         Returns:
-            Complete response with validated remedies and scores
+            Complete response with validated remedies and scores, 
+            OR hard-coded safety warning if temporal violations detected
         """
         allergies = allergies or []
         medical_conditions = medical_conditions or []
@@ -95,6 +106,42 @@ class ServViaAgenticRAG:
         )
         logger.info(f"Extracted {len(extracted_remedies)} remedies from chunks")
         
+        # TEMPORAL SAFETY GATE - Step 2.5: Validate medication timing BEFORE LLM generation
+        if user_id and extracted_remedies and TRUST_ENGINE_AVAILABLE:
+            trust_engine = get_trust_engine()
+            herbs = [r['herb_name'] for r in extracted_remedies]
+            
+            temporal_result = await trust_engine.validate_temporal_safety(
+                user_id=user_id,
+                herbs=herbs,
+                symptom_descriptions=[condition] if condition != "general health" else None
+            )
+            
+            if temporal_result.get('blocked'):
+                # CRITICAL: Temporal safety violation - BLOCK the recommendation
+                violations = temporal_result.get('violations', [])
+                recommendations = temporal_result.get('recommendations', [])
+                
+                logger.critical(f"🚫 TEMPORAL SAFETY BLOCK: Preventing remedy recommendation for {user_id[:20]}...")
+                
+                # Return hard-coded safety warning instead of remedy recommendations
+                safety_response = self._generate_temporal_safety_block_response(
+                    user_name=user_name,
+                    violations=violations,
+                    recommendations=recommendations
+                )
+                
+                return {
+                    'response': safety_response,
+                    'condition': condition,
+                    'remedies': [],  # NO remedies returned
+                    'all_remedies': extracted_remedies,  # But log what was blocked
+                    'env_context': {},
+                    'chunks_analyzed': len(retrieved_chunks),
+                    'temporal_safety_blocked': True,
+                    'temporal_violations': violations,
+                }
+        
         # Step 3: Calculate Scientific Confidence Scores
         scored_remedies = self._calculate_scores(extracted_remedies, medical_conditions)
         logger.info(f"Scored {len(scored_remedies)} remedies")
@@ -103,13 +150,13 @@ class ServViaAgenticRAG:
         env_context = {}
         if location:
             lat = location.get('latitude', 20)
-            env_context = self.env_service. get_season(lat)
-            env_context['seasonal_herbs'] = self. env_service.get_recommendations(
-                season=env_context. get('season')
-            ). get('herbs', [])
+            env_context = self.env_service.get_season(lat)
+            env_context['seasonal_herbs'] = self.env_service.get_recommendations(
+                season=env_context.get('season')
+            ).get('herbs', [])
         
         # Step 5: Sort by score and take top remedies
-        scored_remedies.sort(key=lambda x: x. get('scs_score', 0), reverse=True)
+        scored_remedies.sort(key=lambda x: x.get('scs_score', 0), reverse=True)
         top_remedies = scored_remedies[:4]
         
         # Step 6: Generate unified response
@@ -122,13 +169,59 @@ class ServViaAgenticRAG:
             env_context=env_context
         )
         
+        # Step 7: TRUST ENGINE VALIDATION - Verify response with user context
+        verified_remedies = top_remedies
+        if TRUST_ENGINE_AVAILABLE and user_id:
+            trust_engine = get_trust_engine()
+            try:
+                # Get herb names for validation
+                herb_names = [r['herb_name'] for r in top_remedies]
+                
+                # Call Trust Engine verify_response with user_id for temporal safety
+                validation_result = await trust_engine.verify_response(
+                    llm_response=response,
+                    query=query,
+                    user_id=user_id,
+                    user_conditions=medical_conditions,
+                    user_medications=[],  # Could be populated from user profile
+                    user_allergies=allergies,
+                    current_condition=condition
+                )
+                
+                # Check if temporal safety blocked the response
+                if validation_result.temporal_safety_blocked:
+                    logger.critical(f"🚫 Trust Engine blocked response for {user_id[:20]}...")
+                    # Return blocked response
+                    return {
+                        'response': validation_result.formatted_output or "Safety concern detected. Please consult a healthcare provider.",
+                        'condition': condition,
+                        'remedies': [],
+                        'all_remedies': top_remedies,
+                        'env_context': env_context,
+                        'chunks_analyzed': len(retrieved_chunks),
+                        'temporal_safety_blocked': True,
+                        'temporal_violations': validation_result.temporal_violations,
+                    }
+                
+                # Filter out contraindicated herbs
+                if validation_result.contraindicated_herbs:
+                    verified_remedies = [
+                        r for r in top_remedies 
+                        if r['herb_name'].lower() not in [h.lower() for h in validation_result.contraindicated_herbs]
+                    ]
+                    logger.info(f"Filtered {len(top_remedies) - len(verified_remedies)} contraindicated remedies")
+                
+            except Exception as e:
+                logger.error(f"Trust Engine validation error: {e}")
+        
         return {
             'response': response,
             'condition': condition,
-            'remedies': top_remedies,
+            'remedies': verified_remedies,
             'all_remedies': scored_remedies,
             'env_context': env_context,
-            'chunks_analyzed': len(retrieved_chunks)
+            'chunks_analyzed': len(retrieved_chunks),
+            'temporal_safety_blocked': False,
         }
     
     def _identify_condition(self, query: str) -> str:
@@ -473,3 +566,56 @@ class ServViaAgenticRAG:
         response += f"💚 Take care, {user_name}!  Ask me if you'd like more details about any remedy."
         
         return response
+    
+    def _generate_temporal_safety_block_response(
+        self,
+        user_name: str,
+        violations: List[str],
+        recommendations: List[str]
+    ) -> str:
+        """
+        Generate hard-coded safety warning when temporal safety violations are detected.
+        This OVERRIDES the LLM to prevent dangerous recommendations.
+        
+        Returns a clear, empathetic safety message with next steps.
+        """
+        response_parts = []
+        
+        # Header with block warning
+        response_parts.append(f"🚫 **Safety Alert for {user_name}**")
+        response_parts.append("")
+        response_parts.append("I cannot provide the requested natural remedy recommendation at this time due to a critical safety concern related to your current medications.")
+        response_parts.append("")
+        
+        # Violations section
+        if violations:
+            response_parts.append("**⚠️ Safety Concerns Detected:**")
+            response_parts.append("")
+            for violation in violations[:3]:  # Show up to 3 violations
+                response_parts.append(f"• {violation}")
+            response_parts.append("")
+        
+        # Recommendations section
+        if recommendations:
+            response_parts.append("**📋 Recommended Actions:**")
+            response_parts.append("")
+            for rec in recommendations[:3]:
+                response_parts.append(f"• {rec}")
+            response_parts.append("")
+        
+        # Alternative advice
+        response_parts.append("**💡 What You Can Do Now:**")
+        response_parts.append("")
+        response_parts.append("• Consult your prescribing physician about when it will be safe to introduce herbal supplements")
+        response_parts.append("• Focus on non-pharmacological approaches: rest, hydration, stress reduction, dietary adjustments")
+        response_parts.append("• Monitor your symptoms and seek medical attention if they worsen")
+        response_parts.append("")
+        
+        # Disclaimer
+        response_parts.append("---")
+        response_parts.append("")
+        response_parts.append("**Important:** This safety check is designed to protect you from potentially harmful drug-herb interactions. Your health and safety are the priority. Please consult with a healthcare provider for personalized guidance.")
+        response_parts.append("")
+        response_parts.append(f"💚 Take care, {user_name}. I'm here to help when it's safe to do so.")
+        
+        return "\n".join(response_parts)
