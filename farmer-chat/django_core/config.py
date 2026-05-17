@@ -49,13 +49,25 @@ class Config:
     OUT_OF_CONTEXT_PROMPT = ENV_CONFIG.get("OUT_OF_CONTEXT_PROMPT")
     RESPONSE_GEN_PROMPT = ENV_CONFIG.get("RESPONSE_GEN_PROMPT")
 
-    # openAI config
-    OPEN_AI_KEY = ENV_CONFIG.get("OPENAI_API_KEY")
-    GPT_3_MODEL = ENV_CONFIG.get("GPT_3_MODEL", "gpt-3.5-turbo")
-    GPT_4_MODEL = ENV_CONFIG.get("GPT_4_MODEL", "gpt-4-0125-preview")
+    # Groq config (primary LLM — free, OpenAI-compatible)
+    GROQ_API_KEY = ENV_CONFIG.get("GROQ_API_KEY")
+    GROQ_MODEL = ENV_CONFIG.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    GROQ_FAST_MODEL = ENV_CONFIG.get("GROQ_FAST_MODEL", "llama-3.1-8b-instant")
+    # Reasoning model for the pre-Proposer analysis step.
+    # Uses the same model as GROQ_MODEL by default (llama-3.3-70b-versatile).
+    # Override via .env if a dedicated reasoning model becomes available on your plan.
+    GROQ_REASONER_MODEL = ENV_CONFIG.get("GROQ_REASONER_MODEL", GROQ_MODEL)
+    USE_REASONER = handle_boolean(ENV_CONFIG.get("USE_REASONER", "true"))
     TEMPERATURE = ENV_CONFIG.get("TEMPERATURE", 0)
     MAX_TOKENS = ENV_CONFIG.get("MAX_TOKENS", 500)
     CHAT_HISTORY_WINDOW = ENV_CONFIG.get("CHAT_HISTORY_WINDOW", 4)
+
+    # OpenAI config (primary LLM — paid key)
+    OPEN_AI_KEY = ENV_CONFIG.get("OPENAI_API_KEY")
+    OAI_MODEL = ENV_CONFIG.get("OAI_MODEL", "gpt-4o")
+    # Legacy aliases
+    GPT_3_MODEL = OAI_MODEL
+    GPT_4_MODEL = OAI_MODEL
 
     # Content Retrieval APIs
     CONTENT_DOMAIN_URL = ENV_CONFIG.get("CONTENT_DOMAIN_URL")

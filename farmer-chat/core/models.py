@@ -381,3 +381,19 @@ class BiologicalState(BaseModel):
         default=None,
         description="Contextual note for downstream recommendation systems.",
     )
+    temperature_celsius: Optional[float] = Field(
+        default=None,
+        description="Current ambient temperature from weather API.",
+    )
+    weather_description: Optional[str] = Field(
+        default=None,
+        description="Human-readable weather condition (e.g., 'Overcast', 'Clear sky').",
+    )
+    location_city: Optional[str] = Field(
+        default=None,
+        description="Resolved city name from IP geolocation.",
+    )
+    location_country: Optional[str] = Field(
+        default=None,
+        description="Resolved country name from IP geolocation.",
+    )

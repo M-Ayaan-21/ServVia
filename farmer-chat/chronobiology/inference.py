@@ -2,13 +2,13 @@
 ServVia Chronobiology Inference Engine
 =======================================
 
-Lightweight, deterministic module that estimates a user's biological state
-from minimal contextual inputs — local time and optional geolocation.
+Lightweight module that estimates a user's biological state from minimal
+contextual inputs — local time, IP-derived geolocation, and live weather data.
 Requires **NO wearable data** and makes **ZERO LLM calls**.
 
-The engine produces a `BiologicalState` object that downstream systems
-(RAG pipeline, response generator, dosing advisor) can use to temporally
-contextualize health recommendations.
+External APIs used (both free, no API key required):
+    - ip-api.com        — IP-to-geolocation (lat/lon, timezone, city, country)
+    - open-meteo.com    — Real-time weather (temperature, weather code)
 
 Theoretical Foundations:
     - **Two-Process Model** (Borbély, 1982): Process C (circadian) and
@@ -17,16 +17,20 @@ Theoretical Foundations:
       to dosha dominance periods (Vata/Pitta/Kapha).
     - **Ritucharya**: Ayurvedic seasonal regimen linking climate to
       physiological tendencies.
+    - **Seasonal Affective Context**: Overcast/rainy weather documented
+      to increase subjective fatigue and elevate homeostatic sleep drive.
 
 Author: ServVia Engineering
-Version: 1.0.0
+Version: 2.0.0
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
+
+import requests
 
 from core.models import (
     BiologicalState,
@@ -36,6 +40,42 @@ from core.models import (
 )
 
 logger = logging.getLogger("ServVia.ChronobiologyEngine")
+
+
+# =============================================================================
+# WEATHER CODE MAPPING (WMO Weather Code Standard — used by Open-Meteo)
+# =============================================================================
+
+_WEATHER_CODE_MAP: dict[int, str] = {
+    0:  "Clear sky",
+    1:  "Mainly clear",
+    2:  "Partly cloudy",
+    3:  "Overcast",
+    45: "Fog",
+    48: "Icy fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    71: "Slight snow",
+    73: "Moderate snow",
+    75: "Heavy snow",
+    77: "Snow grains",
+    80: "Slight showers",
+    81: "Moderate showers",
+    82: "Violent showers",
+    85: "Slight snow showers",
+    86: "Heavy snow showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with hail",
+    99: "Thunderstorm with heavy hail",
+}
+
+# Weather codes that increase subjective fatigue / homeostatic sleep drive
+_SLEEP_PRESSURE_ELEVATING_CODES = {45, 48, 51, 53, 55, 61, 63, 65, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99}
+_OVERCAST_CODES = {3, 45, 48}
 
 
 # =============================================================================
@@ -58,6 +98,126 @@ def _classify_hemisphere(latitude: float) -> str:
 
 
 # =============================================================================
+# GEOLOCATION FROM IP (ip-api.com — free, no key, 45 req/min)
+# =============================================================================
+
+def fetch_location_from_ip(ip_address: str) -> dict:
+    """
+    Resolve geolocation from a client IP address using ip-api.com.
+
+    Returns a dict with lat, lon, timezone, city, country — or defaults
+    (Hyderabad, India) if the lookup fails or IP is private/loopback.
+
+    Args:
+        ip_address: IPv4 or IPv6 address string.
+
+    Returns:
+        {
+            "lat": float,
+            "lon": float,
+            "timezone": str,   # e.g. "Asia/Kolkata"
+            "city": str,
+            "country": str,
+        }
+    """
+    _default = {
+        "lat": 17.38,
+        "lon": 78.49,
+        "timezone": "Asia/Kolkata",
+        "city": "Hyderabad",
+        "country": "India",
+    }
+
+    # Skip lookup for loopback / private IPs
+    if not ip_address or ip_address in ("127.0.0.1", "::1", "localhost"):
+        logger.debug("Private/loopback IP — using default location (Hyderabad)")
+        return _default
+
+    try:
+        url = (
+            f"http://ip-api.com/json/{ip_address}"
+            f"?fields=status,lat,lon,timezone,city,country"
+        )
+        resp = requests.get(url, timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("status") == "success":
+                logger.info(
+                    f"📍 Geolocation resolved: {data.get('city')}, "
+                    f"{data.get('country')} ({data.get('lat')}, {data.get('lon')})"
+                )
+                return {
+                    "lat": float(data["lat"]),
+                    "lon": float(data["lon"]),
+                    "timezone": data.get("timezone", "UTC"),
+                    "city": data.get("city", "Unknown"),
+                    "country": data.get("country", "Unknown"),
+                }
+    except Exception as exc:
+        logger.warning(f"IP geolocation failed ({ip_address}): {exc}")
+
+    return _default
+
+
+# =============================================================================
+# WEATHER CONTEXT FROM OPEN-METEO (free, no API key required)
+# =============================================================================
+
+def fetch_weather_context(lat: float, lon: float) -> dict:
+    """
+    Fetch current weather from Open-Meteo API.
+
+    Args:
+        lat: Latitude.
+        lon: Longitude.
+
+    Returns:
+        {
+            "weather_code": int,
+            "temperature_celsius": float,
+            "weather_description": str,
+            "elevates_sleep_pressure": bool,
+        }
+    """
+    _default = {
+        "weather_code": 0,
+        "temperature_celsius": None,
+        "weather_description": None,
+        "elevates_sleep_pressure": False,
+    }
+
+    try:
+        url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}"
+            f"&current_weather=true&timezone=auto&forecast_days=1"
+        )
+        resp = requests.get(url, timeout=4)
+        if resp.status_code == 200:
+            data = resp.json()
+            cw = data.get("current_weather", {})
+            code = int(cw.get("weathercode", 0))
+            temp = cw.get("temperature")
+            description = _WEATHER_CODE_MAP.get(code, "Unknown")
+            elevates = code in _SLEEP_PRESSURE_ELEVATING_CODES
+
+            logger.info(
+                f"🌤 Weather: {description} | {temp}°C | "
+                f"Sleep-pressure elevating: {elevates}"
+            )
+            return {
+                "weather_code": code,
+                "temperature_celsius": float(temp) if temp is not None else None,
+                "weather_description": description,
+                "elevates_sleep_pressure": elevates,
+            }
+    except Exception as exc:
+        logger.warning(f"Weather fetch failed ({lat}, {lon}): {exc}")
+
+    return _default
+
+
+# =============================================================================
 # CHRONOBIOLOGY ENGINE
 # =============================================================================
 
@@ -65,18 +225,20 @@ class ChronobiologyEngine:
     """
     Deterministic inference engine for passive biological state estimation.
 
-    Computes circadian phase, seasonal influence, sleep pressure, and
-    circadian misalignment from local time and optional coordinates.
-    All logic is rule-based — no ML models or API calls.
+    Now integrates real geolocation (IP-based) and live weather data to
+    produce a richer BiologicalState — including weather-influenced sleep
+    pressure, location-aware hemisphere classification, and timezone-corrected
+    circadian phase determination.
+
+    All safety-critical logic remains rule-based — no ML models, no LLM calls.
 
     Usage:
-        >>> from datetime import datetime
         >>> engine = ChronobiologyEngine()
-        >>> state = engine.infer_state(datetime(2026, 7, 15, 8, 30))
-        >>> state.circadian_phase
-        <CircadianPhase.MORNING_ACTIVATION: 'morning_activation'>
-        >>> state.is_misaligned
-        False
+        >>> state = engine.infer_state_from_request("203.0.113.5")
+        >>> state.location_city
+        'Mumbai'
+        >>> state.weather_description
+        'Partly cloudy'
     """
 
     # Default location: Hyderabad, India (17.38°N, 78.49°E)
@@ -84,60 +246,93 @@ class ChronobiologyEngine:
     DEFAULT_LONGITUDE = 78.49
 
     def __init__(self) -> None:
-        """Initialize the engine."""
-        logger.info("ChronobiologyEngine initialized (deterministic, zero-LLM)")
+        logger.info("ChronobiologyEngine v2.0 initialized (geolocation + weather enabled)")
 
     # -------------------------------------------------------------------------
-    # PUBLIC API
+    # PUBLIC API — PRIMARY ENTRY POINT (with IP geolocation + weather)
     # -------------------------------------------------------------------------
+
+    def infer_state_from_request(self, ip_address: str) -> BiologicalState:
+        """
+        Infer biological state from a client IP address.
+
+        Performs geolocation lookup, fetches live weather, then computes
+        all chronobiological dimensions. This is the preferred entry point
+        for production use — it uses the user's real location and weather.
+
+        Args:
+            ip_address: The client's IP address from the HTTP request.
+
+        Returns:
+            BiologicalState with full geolocation + weather context.
+        """
+        geo = fetch_location_from_ip(ip_address)
+
+        lat = geo["lat"]
+        lon = geo["lon"]
+        tz_name = geo.get("timezone", "UTC")
+
+        # Resolve local time from timezone string
+        try:
+            import zoneinfo
+            tz = zoneinfo.ZoneInfo(tz_name)
+            local_time = datetime.now(tz)
+        except Exception:
+            # Fallback: UTC
+            local_time = datetime.now(timezone.utc)
+
+        weather = fetch_weather_context(lat, lon)
+
+        return self.infer_state(
+            local_time=local_time,
+            coordinates=(lat, lon),
+            weather_data=weather,
+            location_city=geo.get("city"),
+            location_country=geo.get("country"),
+        )
 
     def infer_state(
         self,
         local_time: datetime,
         coordinates: Optional[Tuple[float, float]] = None,
+        weather_data: Optional[dict] = None,
+        location_city: Optional[str] = None,
+        location_country: Optional[str] = None,
     ) -> BiologicalState:
         """
-        Infer the user's biological state from local time and location.
-
-        This is the primary entry point. It computes all four biological
-        dimensions and returns a validated Pydantic object.
+        Infer the user's biological state from local time and optional context.
 
         Args:
-            local_time: The user's local datetime (naive or aware).
-                        The time component determines circadian phase.
-                        The month determines seasonal influence.
+            local_time: The user's local datetime.
             coordinates: Optional (latitude, longitude) tuple.
-                         Used to determine hemisphere for season mapping.
                          Defaults to Hyderabad, India (17.38°N).
+            weather_data: Optional dict from fetch_weather_context().
+            location_city: City name for display purposes.
+            location_country: Country name for display purposes.
 
         Returns:
-            BiologicalState: Frozen Pydantic model with all inferred fields.
-
-        Examples:
-            >>> engine = ChronobiologyEngine()
-            >>> # Morning query in winter (Northern Hemisphere)
-            >>> state = engine.infer_state(
-            ...     datetime(2026, 1, 15, 8, 0),
-            ...     coordinates=(40.71, -74.01),  # New York
-            ... )
-            >>> state.circadian_phase.value
-            'morning_activation'
-            >>> state.seasonal_influence.value
-            'winter_accumulation'
+            BiologicalState: Pydantic model with all inferred fields.
         """
         lat, lon = coordinates or (self.DEFAULT_LATITUDE, self.DEFAULT_LONGITUDE)
         hemisphere = _classify_hemisphere(lat)
         hour = local_time.hour
         month = local_time.month
 
-        # Compute each dimension
+        # Compute circadian dimensions
         phase = self._determine_circadian_phase(hour)
         season = self._determine_seasonal_influence(month, hemisphere)
-        pressure = self._determine_sleep_pressure(hour)
         misaligned = self._detect_misalignment(hour)
 
-        # Compose advisory string
-        advisory = self._compose_advisory(phase, misaligned, season, hour)
+        # Weather-influenced sleep pressure
+        pressure = self._determine_sleep_pressure(
+            hour,
+            weather_elevates=weather_data.get("elevates_sleep_pressure", False) if weather_data else False,
+        )
+
+        # Compose advisory string (includes weather context)
+        advisory = self._compose_advisory(
+            phase, misaligned, season, hour, weather_data
+        )
 
         state = BiologicalState(
             local_time=local_time,
@@ -147,12 +342,17 @@ class ChronobiologyEngine:
             is_misaligned=misaligned,
             hemisphere=hemisphere,
             advisory=advisory,
+            temperature_celsius=weather_data.get("temperature_celsius") if weather_data else None,
+            weather_description=weather_data.get("weather_description") if weather_data else None,
+            location_city=location_city,
+            location_country=location_country,
         )
 
         logger.info(
             f"🕐 Inferred state @ {hour:02d}:00 | "
             f"Phase: {phase.value} | Season: {season.value} | "
-            f"Pressure: {pressure.value} | Misaligned: {misaligned}"
+            f"Pressure: {pressure.value} | Misaligned: {misaligned} | "
+            f"Weather: {weather_data.get('weather_description') if weather_data else 'N/A'}"
         )
 
         return state
@@ -165,15 +365,6 @@ class ChronobiologyEngine:
     def _determine_circadian_phase(hour: int) -> CircadianPhase:
         """
         Map the local hour to a circadian phase.
-
-        Phase boundaries are based on the cortisol awakening response,
-        core body temperature rhythm, and melatonin onset timing.
-
-        Args:
-            hour: Hour of day (0–23).
-
-        Returns:
-            CircadianPhase enum value.
 
         Phase Map:
             04–06: EARLY_MORNING    — Cortisol surge, parasympathetic→sympathetic
@@ -215,28 +406,9 @@ class ChronobiologyEngine:
         Determine seasonal physiological influence from month and hemisphere.
 
         Uses Ayurvedic Ritucharya mapping with hemisphere inversion for
-        the Southern Hemisphere:
-
-            Northern Hemisphere:
-                Dec–Feb: WINTER_ACCUMULATION (Hemanta/Shishira — Kapha builds)
-                Mar–Apr: SPRING_RELEASE      (Vasanta — Kapha liquefies)
-                May–Jun: SUMMER_HEAT         (Grishma — Pitta rises)
-                Jul–Aug: MONSOON_DAMPNESS    (Varsha — Vata aggravation)
-                Sep–Oct: AUTUMN_TRANSITION   (Sharad — residual Pitta)
-                Nov:     LATE_AUTUMN_DRY     (Hemanta onset — Vata dominant)
-
-            Equatorial regions use a simplified wet/dry model.
-
-        Args:
-            month: Month of year (1–12).
-            hemisphere: "northern", "southern", or "equatorial".
-
-        Returns:
-            SeasonalInfluence enum value.
+        the Southern Hemisphere.
         """
-        # Equatorial regions have minimal seasonal variation
         if hemisphere == "equatorial":
-            # Simplified: wet season (Jun–Oct) vs dry season
             if 6 <= month <= 10:
                 return SeasonalInfluence.MONSOON_DAMPNESS
             elif month in (11, 12, 1, 2):
@@ -244,7 +416,6 @@ class ChronobiologyEngine:
             else:
                 return SeasonalInfluence.SUMMER_HEAT
 
-        # Northern Hemisphere mapping
         northern_map = {
             12: SeasonalInfluence.WINTER_ACCUMULATION,
             1:  SeasonalInfluence.WINTER_ACCUMULATION,
@@ -264,40 +435,52 @@ class ChronobiologyEngine:
             return northern_map[month]
 
         # Southern Hemisphere: shift 6 months
-        # SH January = NH July (monsoon), SH July = NH January (winter)
         shifted_month = ((month - 1 + 6) % 12) + 1
         return northern_map[shifted_month]
 
     # -------------------------------------------------------------------------
-    # PRIVATE: SLEEP PRESSURE ESTIMATION
+    # PRIVATE: SLEEP PRESSURE ESTIMATION (weather-aware)
     # -------------------------------------------------------------------------
 
     @staticmethod
-    def _determine_sleep_pressure(hour: int) -> SleepPressure:
+    def _determine_sleep_pressure(
+        hour: int,
+        weather_elevates: bool = False,
+    ) -> SleepPressure:
         """
-        Estimate homeostatic sleep drive from time of day.
+        Estimate homeostatic sleep drive from time of day and weather.
 
-        Based on the Process S model — adenosine accumulates linearly
-        during wakefulness. Assuming a conventional schedule with
-        waking around 06:00–07:00:
+        Based on Borbély's Process S model — adenosine accumulates during
+        wakefulness. Additionally, overcast/rainy weather is documented to
+        increase subjective fatigue (dim-light melatonin effects, reduced
+        alertness) and is reflected here as a pressure elevation.
 
-            Morning (04–11):  LOW      — Recently cleared by sleep
-            Afternoon (12–18): MODERATE — Building through the day
-            Evening+ (19–03):  HIGH     — Strong drive, sleep imminent/overdue
+        Weather elevation rule:
+            LOW + rainy      → MODERATE
+            MODERATE + rainy → HIGH
+            HIGH             → HIGH (unchanged)
 
         Args:
             hour: Hour of day (0–23).
+            weather_elevates: True if current weather promotes fatigue.
 
         Returns:
             SleepPressure enum value.
         """
         if 4 <= hour <= 11:
-            return SleepPressure.LOW
+            base = SleepPressure.LOW
         elif 12 <= hour <= 18:
-            return SleepPressure.MODERATE
+            base = SleepPressure.MODERATE
         else:
-            # 19–23 and 0–3
-            return SleepPressure.HIGH
+            base = SleepPressure.HIGH
+
+        if not weather_elevates or base == SleepPressure.HIGH:
+            return base
+
+        # Upgrade one level when weather elevates fatigue
+        if base == SleepPressure.LOW:
+            return SleepPressure.MODERATE
+        return SleepPressure.HIGH
 
     # -------------------------------------------------------------------------
     # PRIVATE: MISALIGNMENT DETECTION
@@ -309,26 +492,12 @@ class ChronobiologyEngine:
         Detect circadian misalignment.
 
         A user querying during biological sleep hours (22:00–04:00)
-        is potentially experiencing:
-            - Insomnia or difficulty sleeping
-            - Shift work / jet lag
-            - Acute distress requiring immediate attention
-
-        This flag is used downstream to:
-            1. Adjust recommendation tone (more gentle, sleep-supportive)
-            2. Suggest sleep hygiene alongside the primary remedy
-            3. Flag potential chronic circadian disruption
-
-        Args:
-            hour: Hour of day (0–23).
-
-        Returns:
-            True if querying during expected deep sleep hours.
+        is potentially experiencing insomnia, shift work, or jet lag.
         """
         return hour >= 22 or hour <= 4
 
     # -------------------------------------------------------------------------
-    # PRIVATE: ADVISORY COMPOSITION
+    # PRIVATE: ADVISORY COMPOSITION (weather-aware)
     # -------------------------------------------------------------------------
 
     @staticmethod
@@ -337,21 +506,12 @@ class ChronobiologyEngine:
         misaligned: bool,
         season: SeasonalInfluence,
         hour: int,
+        weather_data: Optional[dict] = None,
     ) -> str:
         """
         Compose a contextual advisory string for downstream systems.
 
-        Provides actionable context that the response generator can weave
-        into its recommendations naturally.
-
-        Args:
-            phase: Current circadian phase.
-            misaligned: Whether circadian misalignment is detected.
-            season: Current seasonal influence.
-            hour: Hour of day.
-
-        Returns:
-            Human-readable advisory string.
+        Now includes weather context when available.
         """
         parts: list[str] = []
 
@@ -430,5 +590,22 @@ class ChronobiologyEngine:
             ),
         }
         parts.append(season_notes.get(season, ""))
+
+        # Weather advisory
+        if weather_data:
+            desc = weather_data.get("weather_description")
+            temp = weather_data.get("temperature_celsius")
+            elevates = weather_data.get("elevates_sleep_pressure", False)
+
+            if desc:
+                weather_note = f"Current weather: {desc}"
+                if temp is not None:
+                    weather_note += f" ({temp:.1f}°C)"
+                if elevates:
+                    weather_note += (
+                        " — gloomy conditions may increase fatigue; "
+                        "favour warming or energising remedies."
+                    )
+                parts.append(weather_note)
 
         return " | ".join(p for p in parts if p)

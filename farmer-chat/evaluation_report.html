@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ServVia — Evaluation Report</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #111111;
+    --surface-2: #1a1a1a;
+    --surface-3: #222222;
+    --border: #2a2a2a;
+    --border-accent: rgba(220,38,38,0.25);
+    --red: #dc2626;
+    --red-dark: #991b1b;
+    --red-light: #ef4444;
+    --green: #22c55e;
+    --green-dim: #16a34a;
+    --yellow: #eab308;
+    --blue: #3b82f6;
+    --purple: #a855f7;
+    --cyan: #06b6d4;
+    --text: #f5f5f5;
+    --text-muted: rgba(255,255,255,0.55);
+    --text-dim: rgba(255,255,255,0.35);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, sans-serif;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────── */
+  .header {
+    background: linear-gradient(135deg, var(--red-dark) 0%, #0a0a0a 60%);
+    border-bottom: 1px solid var(--border-accent);
+    padding: 48px 0 40px;
+    text-align: center;
+  }
+  .header h1 {
+    font-size: 42px;
+    font-weight: 900;
+    letter-spacing: -1.5px;
+    background: linear-gradient(135deg, #fff 40%, var(--red-light) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .header .subtitle {
+    font-size: 16px;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+  .header .date {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-top: 12px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── Container ──────────────────────────────────────────────── */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 32px;
+  }
+
+  /* ── Score overview cards ───────────────────────────────────── */
+  .score-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 48px;
+  }
+  .score-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    transition: border-color 0.2s;
+  }
+  .score-card:hover { border-color: var(--border-accent); }
+  .score-card .value {
+    font-size: 36px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    margin-bottom: 4px;
+  }
+  .score-card .value.perfect { color: var(--green); }
+  .score-card .value.high { color: var(--green); }
+  .score-card .value.mid { color: var(--yellow); }
+  .score-card .label {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .score-card .sub {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── Sections ───────────────────────────────────────────────── */
+  .section {
+    margin-bottom: 48px;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-number {
+    background: var(--red);
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .section-title {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+  .section-desc {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-bottom: 20px;
+    line-height: 1.7;
+  }
+
+  /* ── Tables ─────────────────────────────────────────────────── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+  thead th {
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  thead th:first-child { border-radius: 8px 0 0 0; }
+  thead th:last-child { border-radius: 0 8px 0 0; }
+  tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  tbody tr:hover { background: var(--surface); }
+  tbody tr:last-child td { border-bottom: none; }
+  .table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 24px;
+  }
+
+  /* ── Metric badges ──────────────────────────────────────────── */
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .badge-perfect { background: rgba(34,197,94,0.15); color: var(--green); }
+  .badge-high { background: rgba(34,197,94,0.1); color: #4ade80; }
+  .badge-mid { background: rgba(234,179,8,0.15); color: var(--yellow); }
+  .badge-low { background: rgba(239,68,68,0.15); color: var(--red-light); }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .tag-tp { background: rgba(34,197,94,0.15); color: var(--green); }
+  .tag-tn { background: rgba(59,130,246,0.15); color: var(--blue); }
+  .tag-fp { background: rgba(234,179,8,0.15); color: var(--yellow); }
+  .tag-fn { background: rgba(239,68,68,0.15); color: var(--red-light); }
+
+  /* ── Charts ─────────────────────────────────────────────────── */
+  .chart-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 24px;
+  }
+  .chart-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+  }
+  .chart-box h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text-muted);
+  }
+  .chart-box canvas {
+    max-height: 280px;
+  }
+
+  /* ── Confusion matrix ───────────────────────────────────────── */
+  .confusion-grid {
+    display: grid;
+    grid-template-columns: 120px repeat(4, 1fr);
+    gap: 2px;
+    max-width: 600px;
+    margin: 0 auto 24px;
+  }
+  .confusion-cell {
+    background: var(--surface-2);
+    padding: 14px 8px;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .confusion-cell.header {
+    background: var(--surface-3);
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    font-weight: 600;
+  }
+  .confusion-cell.row-label {
+    background: var(--surface-3);
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    text-align: right;
+    padding-right: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  .confusion-cell.diagonal {
+    background: rgba(34,197,94,0.12);
+    color: var(--green);
+  }
+  .confusion-cell.zero {
+    color: var(--text-dim);
+  }
+  .confusion-cell.corner {
+    background: transparent;
+  }
+
+  /* ── Latency bar ────────────────────────────────────────────── */
+  .latency-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .latency-label {
+    width: 80px;
+    font-size: 13px;
+    color: var(--text-muted);
+    text-align: right;
+    font-weight: 500;
+  }
+  .latency-track {
+    flex: 1;
+    height: 28px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+  .latency-fill {
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    padding-left: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    color: #fff;
+    min-width: 60px;
+  }
+
+  /* ── Quality bar chart ──────────────────────────────────────── */
+  .quality-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .quality-name {
+    width: 200px;
+    font-size: 13px;
+    color: var(--text-muted);
+    text-align: right;
+    font-weight: 500;
+  }
+  .quality-track {
+    flex: 1;
+    height: 24px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .quality-fill {
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    color: #fff;
+    transition: width 0.6s ease;
+  }
+
+  /* ── Architecture ───────────────────────────────────────────── */
+  .arch-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 32px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 24px;
+  }
+  .arch-node {
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    min-width: 100px;
+  }
+  .arch-node.highlight {
+    border-color: var(--red);
+    background: rgba(220,38,38,0.08);
+  }
+  .arch-arrow {
+    color: var(--text-dim);
+    font-size: 18px;
+  }
+  .arch-node .node-sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    font-weight: 400;
+    margin-top: 2px;
+  }
+
+  /* ── Footer ─────────────────────────────────────────────────── */
+  .footer {
+    text-align: center;
+    padding: 40px 0;
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+  .footer strong { color: var(--text-muted); }
+
+  /* ── Methodology note ───────────────────────────────────────── */
+  .note-box {
+    background: rgba(220,38,38,0.04);
+    border: 1px solid rgba(220,38,38,0.15);
+    border-radius: 10px;
+    padding: 20px 24px;
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.8;
+    margin-bottom: 24px;
+  }
+  .note-box strong { color: var(--text); }
+
+  @media (max-width: 768px) {
+    .chart-row { grid-template-columns: 1fr; }
+    .score-grid { grid-template-columns: repeat(2, 1fr); }
+    .confusion-grid { grid-template-columns: 80px repeat(4, 1fr); }
+    .container { padding: 24px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ HEADER ═══════════════════ -->
+<div class="header">
+  <h1>ServVia Evaluation Report</h1>
+  <div class="subtitle">Multi-Agent Healthcare Intelligence System &mdash; Quantitative Performance Analysis</div>
+  <div class="date">Generated: 17 May 2026 &nbsp;|&nbsp; Branch: servvia-v2 &nbsp;|&nbsp; Pipeline v4.0</div>
+</div>
+
+<div class="container">
+
+<!-- ═══════════════════ SCORE OVERVIEW ═══════════════════ -->
+<div class="score-grid">
+  <div class="score-card">
+    <div class="value perfect">100%</div>
+    <div class="label">Triage Accuracy</div>
+    <div class="sub">N = 43</div>
+  </div>
+  <div class="score-card">
+    <div class="value perfect">100%</div>
+    <div class="label">Drug-Herb Safety F1</div>
+    <div class="sub">N = 10</div>
+  </div>
+  <div class="score-card">
+    <div class="value high">98.3%</div>
+    <div class="label">Chronobiology</div>
+    <div class="sub">N = 60</div>
+  </div>
+  <div class="score-card">
+    <div class="value perfect">100%</div>
+    <div class="label">Trust Engine</div>
+    <div class="sub">N = 29</div>
+  </div>
+  <div class="score-card">
+    <div class="value high">94.3%</div>
+    <div class="label">Response Quality</div>
+    <div class="sub">N = 5</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ SECTION 1: TRIAGE ═══════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">1</div>
+    <div class="section-title">Triage Classification</div>
+  </div>
+  <p class="section-desc">
+    Deterministic symptom pattern matching across 27 clusters (9 life-threatening, 2 mental health, 16 serious medical).
+    Classifies queries into 4 tiers: <strong>Emergency</strong> (call 112 now), <strong>Mental Health Crisis</strong> (crisis line + warmth),
+    <strong>Serious</strong> (see doctor within 24-48h), and <strong>Benign</strong> (home remedy appropriate). Zero LLM calls &mdash; fully deterministic.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1-Score</th><th>Support</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Emergency</td><td><span class="badge badge-perfect">1.0000</span></td><td><span class="badge badge-perfect">1.0000</span></td><td><span class="badge badge-perfect">1.0000</span></td><td>18</td></tr>
+        <tr><td>Mental Health</td><td><span class="badge badge-perfect">1.0000</span></td><td><span class="badge badge-perfect">1.0000</span></td><td><span class="badge badge-perfect">1.0000</span></td><td>4</td></tr>
+        <tr><td>Serious</td><td><span class="badge badge-perfect">1.0000</span></td><td><span class="badge badge-perfect">1.0000</span></td><td><span class="badge badge-perfect">1.0000</span></td><td>6</td></tr>
+        <tr><td>Benign</td><td><span class="badge badge-perfect">1.0000</span></td><td><span class="badge badge-perfect">1.0000</span></td><td><span class="badge badge-perfect">1.0000</span></td><td>15</td></tr>
+        <tr style="background:var(--surface-2);">
+          <td><strong>Macro Average</strong></td>
+          <td><span class="badge badge-perfect">1.0000</span></td>
+          <td><span class="badge badge-perfect">1.0000</span></td>
+          <td><strong><span class="badge badge-perfect">1.0000</span></strong></td>
+          <td>43</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="chart-row">
+    <div class="chart-box">
+      <h3>Per-Class F1 Score</h3>
+      <canvas id="triageF1Chart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Confusion Matrix (N=43)</h3>
+      <div class="confusion-grid">
+        <!-- Header row -->
+        <div class="confusion-cell corner"></div>
+        <div class="confusion-cell header">Emerg.</div>
+        <div class="confusion-cell header">Mental</div>
+        <div class="confusion-cell header">Serious</div>
+        <div class="confusion-cell header">Benign</div>
+        <!-- Emergency row -->
+        <div class="confusion-cell row-label">Emergency</div>
+        <div class="confusion-cell diagonal">18</div>
+        <div class="confusion-cell zero">0</div>
+        <div class="confusion-cell zero">0</div>
+        <div class="confusion-cell zero">0</div>
+        <!-- Mental health row -->
+        <div class="confusion-cell row-label">Mental Health</div>
+        <div class="confusion-cell zero">0</div>
+        <div class="confusion-cell diagonal">4</div>
+        <div class="confusion-cell zero">0</div>
+        <div class="confusion-cell zero">0</div>
+        <!-- Serious row -->
+        <div class="confusion-cell row-label">Serious</div>
+        <div class="confusion-cell zero">0</div>
+        <div class="confusion-cell zero">0</div>
+        <div class="confusion-cell diagonal">6</div>
+        <div class="confusion-cell zero">0</div>
+        <!-- Benign row -->
+        <div class="confusion-cell row-label">Benign</div>
+        <div class="confusion-cell zero">0</div>
+        <div class="confusion-cell zero">0</div>
+        <div class="confusion-cell zero">0</div>
+        <div class="confusion-cell diagonal">15</div>
+      </div>
+      <div style="text-align:center;font-size:11px;color:var(--text-dim);">Rows = Actual &nbsp;|&nbsp; Columns = Predicted</div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Binary Emergency Detection</th><th>Score</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Sensitivity (Recall)</td><td><span class="badge badge-perfect">1.0000</span></td></tr>
+        <tr><td>Specificity</td><td><span class="badge badge-perfect">1.0000</span></td></tr>
+        <tr><td>Precision (PPV)</td><td><span class="badge badge-perfect">1.0000</span></td></tr>
+        <tr><td>F1-Score</td><td><span class="badge badge-perfect">1.0000</span></td></tr>
+        <tr><td>True Positives / True Negatives</td><td>18 / 25</td></tr>
+        <tr><td>False Positives / False Negatives</td><td>0 / 0</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════ SECTION 2: DRUG-HERB SAFETY ═══════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">2</div>
+    <div class="section-title">Drug-Herb Interaction Safety</div>
+  </div>
+  <p class="section-desc">
+    Neurosymbolic safety validation layer. Maps specific medications to pharmacological classes
+    (100+ drugs across 15 classes) and cross-references against the herb interaction knowledge base.
+    <strong>Zero LLM calls</strong> &mdash; fully deterministic with PubMed-backed evidence.
+  </p>
+
+  <div class="chart-row">
+    <div class="chart-box">
+      <h3>Safety Classification Metrics</h3>
+      <canvas id="safetyRadar"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Interaction Detection Results (N=10)</h3>
+      <div class="table-wrap" style="margin:0;">
+        <table>
+          <thead><tr><th>Test Case</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>Turmeric + Warfarin (bleeding)</td><td><span class="tag tag-tp">TP</span></td></tr>
+            <tr><td>St. John's Wort + SSRI (serotonin)</td><td><span class="tag tag-tp">TP</span></td></tr>
+            <tr><td>Ginkgo + Aspirin (bleeding)</td><td><span class="tag tag-tp">TP</span></td></tr>
+            <tr><td>Kava + Benzodiazepine (CNS)</td><td><span class="tag tag-tp">TP</span></td></tr>
+            <tr><td>Licorice + Diuretic (hypokalemia)</td><td><span class="tag tag-tp">TP</span></td></tr>
+            <tr><td>Ginger + Peppermint, no meds</td><td><span class="tag tag-tn">TN</span></td></tr>
+            <tr><td>Honey + Lemon + Paracetamol</td><td><span class="tag tag-tn">TN</span></td></tr>
+            <tr><td>Chamomile, no meds</td><td><span class="tag tag-tn">TN</span></td></tr>
+            <tr><td>Aloe topical + Metformin</td><td><span class="tag tag-tn">TN</span></td></tr>
+            <tr><td>Tulsi, no meds</td><td><span class="tag tag-tn">TN</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Metric</th><th>Score</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td>Precision</td><td><span class="badge badge-perfect">1.0000</span></td><td>Zero false alarms on safe combinations</td></tr>
+        <tr><td>Recall</td><td><span class="badge badge-perfect">1.0000</span></td><td>All 5 dangerous interactions detected</td></tr>
+        <tr><td>F1-Score</td><td><span class="badge badge-perfect">1.0000</span></td><td>Perfect harmonic mean</td></tr>
+        <tr><td>Specificity</td><td><span class="badge badge-perfect">1.0000</span></td><td>All 5 safe combinations correctly cleared</td></tr>
+        <tr><td>Allergy Detection</td><td><span class="badge badge-perfect">1.0000</span></td><td>2/2 allergen matches detected</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note-box">
+    <strong>Drug Class Resolution (DRUG_CLASS_MAP):</strong> Individual drug names (e.g. sertraline, alprazolam, hydrochlorothiazide)
+    are resolved to their pharmacological classes (SSRIs, Benzodiazepines, Diuretics) before matching against the interaction database.
+    This covers 100+ specific medications across 15 drug classes.
+  </div>
+</div>
+
+<!-- ═══════════════════ SECTION 3: CHRONOBIOLOGY ═══════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">3</div>
+    <div class="section-title">Chronobiology Engine</div>
+  </div>
+  <p class="section-desc">
+    Circadian-aware inference engine that maps time-of-day, weather conditions, geographic coordinates, and season
+    to personalized remedy timing guidance. Uses ip-api.com for geolocation and open-meteo.com for real-time weather.
+  </p>
+
+  <div class="chart-row">
+    <div class="chart-box">
+      <h3>Component Accuracy Breakdown</h3>
+      <canvas id="chronoBar"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Overall: 98.33% (59/60 test points)</h3>
+      <canvas id="chronoDonut"></canvas>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Component</th><th>Accuracy</th><th>Correct</th><th>Total</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td>Circadian Phase</td><td><span class="badge badge-high">95.83%</span></td><td>23</td><td>24</td><td>9-phase mapping across 24 hours</td></tr>
+        <tr><td>Sleep Pressure</td><td><span class="badge badge-perfect">100.0%</span></td><td>10</td><td>10</td><td>3-level estimation with weather elevation</td></tr>
+        <tr><td>Seasonal Influence</td><td><span class="badge badge-perfect">100.0%</span></td><td>12</td><td>12</td><td>6-pattern mapping across 12 months (N/S hemisphere)</td></tr>
+        <tr><td>Misalignment Detection</td><td><span class="badge badge-perfect">100.0%</span></td><td>14</td><td>14</td><td>Binary: awake during 22:00-05:00</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════ SECTION 4: TRUST ENGINE ═══════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">4</div>
+    <div class="section-title">Trust Engine &amp; Evidence Verification</div>
+  </div>
+  <p class="section-desc">
+    GRADE-standard evidence verification with PubMed citations. Validates herbs mentioned in LLM responses against
+    a curated knowledge base of 148 known herbs with 36 evidence entries. Detects fabricated herbs, herb-herb
+    interactions, and condition-specific contraindications.
+  </p>
+
+  <div class="chart-row">
+    <div class="chart-box">
+      <h3>Trust Engine Metrics</h3>
+      <canvas id="trustBar"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Herb-Herb Interaction Detection</h3>
+      <div class="table-wrap" style="margin:0;">
+        <table>
+          <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Precision</td><td><span class="badge badge-perfect">1.0000</span></td></tr>
+            <tr><td>Recall</td><td><span class="badge badge-perfect">1.0000</span></td></tr>
+            <tr><td>F1-Score</td><td><span class="badge badge-perfect">1.0000</span></td></tr>
+            <tr><td>True Positives</td><td>2 (Ginkgo+SJW, Kava+Valerian)</td></tr>
+            <tr><td>True Negatives</td><td>2 (Ginger+Honey, Chamomile+Peppermint)</td></tr>
+            <tr><td>Knowledge Base</td><td>148 herbs, 36 evidence entries, 50+ interactions</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ SECTION 5: PIPELINE PERFORMANCE ═══════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">5</div>
+    <div class="section-title">Multi-Agent Pipeline Performance</div>
+  </div>
+  <p class="section-desc">
+    LangGraph StateGraph with 5 nodes: Reasoner (deepseek-r1) &rarr; Proposer (llama-3.3-70b) &rarr; Critic (llama-3.1-8b)
+    &rarr; Safety Validator (deterministic) &rarr; Fallback. Live API evaluation on 7 queries.
+  </p>
+
+  <!-- Architecture diagram -->
+  <div class="arch-flow">
+    <div class="arch-node highlight">
+      <div>Triage</div>
+      <div class="node-sub">Deterministic</div>
+    </div>
+    <div class="arch-arrow">&rarr;</div>
+    <div class="arch-node">
+      <div>Chronobiology</div>
+      <div class="node-sub">IP + Weather API</div>
+    </div>
+    <div class="arch-arrow">&rarr;</div>
+    <div class="arch-node">
+      <div>Reasoner</div>
+      <div class="node-sub">deepseek-r1-70b</div>
+    </div>
+    <div class="arch-arrow">&rarr;</div>
+    <div class="arch-node">
+      <div>Proposer</div>
+      <div class="node-sub">llama-3.3-70b</div>
+    </div>
+    <div class="arch-arrow">&rarr;</div>
+    <div class="arch-node">
+      <div>Critic</div>
+      <div class="node-sub">llama-3.1-8b</div>
+    </div>
+    <div class="arch-arrow">&rarr;</div>
+    <div class="arch-node highlight">
+      <div>Safety</div>
+      <div class="node-sub">Neurosymbolic</div>
+    </div>
+    <div class="arch-arrow">&rarr;</div>
+    <div class="arch-node">
+      <div>Trust Engine</div>
+      <div class="node-sub">GRADE + PubMed</div>
+    </div>
+  </div>
+
+  <!-- Latency bars -->
+  <div class="chart-box" style="margin-bottom:24px;">
+    <h3>End-to-End Latency Distribution (N=7 queries)</h3>
+    <div style="padding:16px 0;">
+      <div class="latency-bar-wrap">
+        <div class="latency-label">Min</div>
+        <div class="latency-track">
+          <div class="latency-fill" style="width:33%;background:var(--green);">7,693 ms</div>
+        </div>
+      </div>
+      <div class="latency-bar-wrap">
+        <div class="latency-label">Median</div>
+        <div class="latency-track">
+          <div class="latency-fill" style="width:62%;background:var(--blue);">14,462 ms</div>
+        </div>
+      </div>
+      <div class="latency-bar-wrap">
+        <div class="latency-label">Mean</div>
+        <div class="latency-track">
+          <div class="latency-fill" style="width:60%;background:var(--blue);">13,851 ms</div>
+        </div>
+      </div>
+      <div class="latency-bar-wrap">
+        <div class="latency-label">P95</div>
+        <div class="latency-track">
+          <div class="latency-fill" style="width:100%;background:var(--yellow);">23,174 ms</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pipeline Metric</th><th>Value</th><th>Interpretation</th></tr></thead>
+      <tbody>
+        <tr><td>First-Pass Critic Approval Rate</td><td><span class="badge badge-perfect">100.0%</span></td><td>All responses approved without revision</td></tr>
+        <tr><td>Average Revision Cycles</td><td><span class="badge badge-perfect">0.00</span></td><td>No Proposer&rarr;Critic loops needed</td></tr>
+        <tr><td>Safety Revision Count</td><td><span class="badge badge-perfect">0.00</span></td><td>No safety-triggered re-generations</td></tr>
+        <tr><td>Fallback Rate</td><td><span class="badge badge-perfect">0.0%</span></td><td>No pipeline failures; no fallback invocations</td></tr>
+        <tr><td>Remedy Generation Rate</td><td><span class="badge badge-perfect">100.0%</span></td><td>All benign queries produced remedy responses</td></tr>
+        <tr><td>Mean Latency</td><td><span class="badge badge-mid">13.85s</span></td><td>5-node pipeline with 3 LLM calls</td></tr>
+        <tr><td>P95 Latency</td><td><span class="badge badge-mid">23.17s</span></td><td>Worst-case for complex reasoning queries</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════ SECTION 6: RESPONSE QUALITY ═══════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">6</div>
+    <div class="section-title">Response Quality Assessment</div>
+  </div>
+  <p class="section-desc">
+    Structural quality evaluation on 5 live responses. Each response scored against 7 criteria measuring
+    completeness, safety, and clinical appropriateness. Scores reflect deterministic checks, not subjective judgment.
+  </p>
+
+  <div class="chart-box" style="margin-bottom:24px;">
+    <h3>Criteria Pass Rates</h3>
+    <div style="padding:16px 0;">
+      <div class="quality-row">
+        <div class="quality-name">Has Remedies</div>
+        <div class="quality-track"><div class="quality-fill" style="width:100%;background:var(--green);">100%</div></div>
+      </div>
+      <div class="quality-row">
+        <div class="quality-name">Response Length (&gt;200 chars)</div>
+        <div class="quality-track"><div class="quality-fill" style="width:100%;background:var(--green);">100%</div></div>
+      </div>
+      <div class="quality-row">
+        <div class="quality-name">Doctor Escalation Present</div>
+        <div class="quality-track"><div class="quality-fill" style="width:100%;background:var(--green);">100%</div></div>
+      </div>
+      <div class="quality-row">
+        <div class="quality-name">Multiple Remedies (&ge;2)</div>
+        <div class="quality-track"><div class="quality-fill" style="width:100%;background:var(--green);">100%</div></div>
+      </div>
+      <div class="quality-row">
+        <div class="quality-name">Safety Notes Included</div>
+        <div class="quality-track"><div class="quality-fill" style="width:100%;background:var(--green);">100%</div></div>
+      </div>
+      <div class="quality-row">
+        <div class="quality-name">Specific Quantities</div>
+        <div class="quality-track"><div class="quality-fill" style="width:80%;background:var(--blue);">80%</div></div>
+      </div>
+      <div class="quality-row">
+        <div class="quality-name">No False Emergency Escalation</div>
+        <div class="quality-track"><div class="quality-fill" style="width:80%;background:var(--blue);">80%</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Query</th><th>Score</th><th>Details</th></tr></thead>
+      <tbody>
+        <tr><td>Mild cold, runny nose, sore throat</td><td><span class="badge badge-perfect">100%</span></td><td>7/7 criteria met</td></tr>
+        <tr><td>Indigestion and stomach bloating</td><td><span class="badge badge-perfect">100%</span></td><td>7/7 criteria met</td></tr>
+        <tr><td>Mild headache and slight fever</td><td><span class="badge badge-perfect">100%</span></td><td>7/7 criteria met</td></tr>
+        <tr><td>Joint pain and morning stiffness</td><td><span class="badge badge-mid">71.4%</span></td><td>5/7 &mdash; no specific quantities; mentioned "emergency" in general context</td></tr>
+        <tr><td>Sore throat with dry cough</td><td><span class="badge badge-perfect">100%</span></td><td>7/7 criteria met</td></tr>
+        <tr style="background:var(--surface-2);">
+          <td><strong>Average</strong></td>
+          <td><strong><span class="badge badge-high">94.3%</span></strong></td>
+          <td>33/35 total criteria passed</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════ SECTION 7: AGGREGATE SUMMARY ═══════════════════ -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-number">7</div>
+    <div class="section-title">Aggregate Performance Summary</div>
+  </div>
+
+  <div class="chart-row">
+    <div class="chart-box">
+      <h3>All Components &mdash; Accuracy Overview</h3>
+      <canvas id="overallRadar"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Component Scores</h3>
+      <canvas id="overallBar"></canvas>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Component</th><th>Key Metric</th><th>Score</th><th>Test Points</th><th>Type</th></tr></thead>
+      <tbody>
+        <tr><td>Triage Classification</td><td>Macro F1</td><td><span class="badge badge-perfect">1.0000</span></td><td>43</td><td>Deterministic</td></tr>
+        <tr><td>Emergency Detection</td><td>Sensitivity</td><td><span class="badge badge-perfect">1.0000</span></td><td>43</td><td>Deterministic</td></tr>
+        <tr><td>Drug-Herb Interaction</td><td>F1-Score</td><td><span class="badge badge-perfect">1.0000</span></td><td>10</td><td>Deterministic</td></tr>
+        <tr><td>Allergy Detection</td><td>Sensitivity</td><td><span class="badge badge-perfect">1.0000</span></td><td>2</td><td>Deterministic</td></tr>
+        <tr><td>Chronobiology Engine</td><td>Overall Accuracy</td><td><span class="badge badge-high">0.9833</span></td><td>60</td><td>Deterministic</td></tr>
+        <tr><td>Herb Verification</td><td>Accuracy</td><td><span class="badge badge-perfect">1.0000</span></td><td>10</td><td>Deterministic</td></tr>
+        <tr><td>Evidence Coverage</td><td>Coverage Rate</td><td><span class="badge badge-perfect">1.0000</span></td><td>10</td><td>Deterministic</td></tr>
+        <tr><td>Fabricated Herb Rejection</td><td>Accuracy</td><td><span class="badge badge-perfect">1.0000</span></td><td>5</td><td>Deterministic</td></tr>
+        <tr><td>Herb-Herb Interaction</td><td>F1-Score</td><td><span class="badge badge-perfect">1.0000</span></td><td>4</td><td>Deterministic</td></tr>
+        <tr><td>Response Quality</td><td>Quality Score</td><td><span class="badge badge-high">94.3%</span></td><td>5</td><td>Live API</td></tr>
+        <tr><td>Pipeline Reliability</td><td>First-Pass Rate</td><td><span class="badge badge-perfect">100.0%</span></td><td>7</td><td>Live API</td></tr>
+        <tr><td>End-to-End Latency</td><td>Mean</td><td><span class="badge badge-mid">13.85s</span></td><td>7</td><td>Live API</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note-box">
+    <strong>Methodology Note:</strong> All deterministic components (triage, safety, chronobiology, trust engine)
+    are evaluated on curated test sets designed to exercise the system's defined capabilities. Test queries match
+    the symptom patterns and drug classes encoded in the knowledge base. Sample sizes (N=2 to N=60) are noted
+    per metric. Adversarial queries (typos, slang, multi-language, novel phrasings) are out of scope for this
+    evaluation and represent a known limitation. Live API metrics use actual Groq/OpenAI inference calls and
+    reflect real-world latency and LLM response quality.
+  </div>
+</div>
+
+</div><!-- /.container -->
+
+<div class="footer">
+  <strong>ServVia</strong> &mdash; AI Healthcare Intelligence &nbsp;|&nbsp;
+  Pipeline v4.0 &nbsp;|&nbsp; LangGraph + Neurosymbolic Safety &nbsp;|&nbsp;
+  Report generated 17 May 2026
+</div>
+
+<!-- ═══════════════════ CHARTS ═══════════════════ -->
+<script>
+Chart.defaults.color = 'rgba(255,255,255,0.55)';
+Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
+Chart.defaults.font.family = "'Inter', sans-serif";
+
+const RED = '#dc2626';
+const RED_LIGHT = '#ef4444';
+const GREEN = '#22c55e';
+const BLUE = '#3b82f6';
+const YELLOW = '#eab308';
+const PURPLE = '#a855f7';
+const CYAN = '#06b6d4';
+
+// 1. Triage F1 Bar Chart
+new Chart(document.getElementById('triageF1Chart'), {
+  type: 'bar',
+  data: {
+    labels: ['Emergency', 'Mental Health', 'Serious', 'Benign'],
+    datasets: [{
+      label: 'F1-Score',
+      data: [1.0, 1.0, 1.0, 1.0],
+      backgroundColor: [RED, PURPLE, YELLOW, GREEN],
+      borderRadius: 6,
+      barThickness: 40,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { beginAtZero: true, max: 1.1, ticks: { callback: v => (v*100)+'%' } },
+      x: { grid: { display: false } }
+    }
+  }
+});
+
+// 2. Safety Radar
+new Chart(document.getElementById('safetyRadar'), {
+  type: 'radar',
+  data: {
+    labels: ['Precision', 'Recall', 'F1-Score', 'Specificity', 'Accuracy'],
+    datasets: [{
+      label: 'Drug-Herb Safety',
+      data: [1.0, 1.0, 1.0, 1.0, 1.0],
+      backgroundColor: 'rgba(220,38,38,0.15)',
+      borderColor: RED,
+      borderWidth: 2,
+      pointBackgroundColor: RED,
+      pointRadius: 5,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      r: {
+        beginAtZero: true, max: 1.0,
+        ticks: { display: false },
+        grid: { color: 'rgba(255,255,255,0.06)' },
+        pointLabels: { font: { size: 12 } }
+      }
+    }
+  }
+});
+
+// 3. Chronobiology Bar
+new Chart(document.getElementById('chronoBar'), {
+  type: 'bar',
+  data: {
+    labels: ['Circadian Phase', 'Sleep Pressure', 'Seasonal', 'Misalignment'],
+    datasets: [{
+      label: 'Accuracy',
+      data: [95.83, 100, 100, 100],
+      backgroundColor: [BLUE, GREEN, GREEN, GREEN],
+      borderRadius: 6,
+      barThickness: 36,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { beginAtZero: true, max: 105, ticks: { callback: v => v+'%' } },
+      y: { grid: { display: false } }
+    }
+  }
+});
+
+// 4. Chronobiology Donut
+new Chart(document.getElementById('chronoDonut'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Correct (59)', 'Incorrect (1)'],
+    datasets: [{
+      data: [59, 1],
+      backgroundColor: [GREEN, 'rgba(255,255,255,0.06)'],
+      borderWidth: 0,
+      cutout: '70%',
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { position: 'bottom', labels: { padding: 16 } },
+    }
+  }
+});
+
+// 5. Trust Engine Bar
+new Chart(document.getElementById('trustBar'), {
+  type: 'bar',
+  data: {
+    labels: ['Herb Verification', 'Evidence Coverage', 'Fabricated Rejection', 'Interaction F1'],
+    datasets: [{
+      label: 'Score',
+      data: [100, 100, 100, 100],
+      backgroundColor: [GREEN, CYAN, PURPLE, RED],
+      borderRadius: 6,
+      barThickness: 36,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { beginAtZero: true, max: 105, ticks: { callback: v => v+'%' } },
+      y: { grid: { display: false } }
+    }
+  }
+});
+
+// 6. Overall Radar
+new Chart(document.getElementById('overallRadar'), {
+  type: 'radar',
+  data: {
+    labels: ['Triage', 'Drug Safety', 'Chronobiology', 'Trust Engine', 'Response Quality', 'Pipeline Reliability'],
+    datasets: [{
+      label: 'ServVia v4.0',
+      data: [100, 100, 98.3, 100, 94.3, 100],
+      backgroundColor: 'rgba(220,38,38,0.12)',
+      borderColor: RED,
+      borderWidth: 2,
+      pointBackgroundColor: RED,
+      pointRadius: 5,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'bottom' } },
+    scales: {
+      r: {
+        beginAtZero: true, min: 80, max: 102,
+        ticks: { display: false },
+        grid: { color: 'rgba(255,255,255,0.06)' },
+        pointLabels: { font: { size: 12, weight: '600' } }
+      }
+    }
+  }
+});
+
+// 7. Overall Horizontal Bar
+new Chart(document.getElementById('overallBar'), {
+  type: 'bar',
+  data: {
+    labels: ['Triage F1', 'Drug-Herb F1', 'Chronobiology', 'Herb Verification', 'Evidence Coverage', 'Fabricated Rejection', 'Response Quality', 'Pipeline Reliability'],
+    datasets: [{
+      label: 'Score (%)',
+      data: [100, 100, 98.3, 100, 100, 100, 94.3, 100],
+      backgroundColor: [RED, RED, BLUE, GREEN, CYAN, PURPLE, YELLOW, GREEN],
+      borderRadius: 6,
+      barThickness: 24,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { beginAtZero: true, min: 85, max: 102, ticks: { callback: v => v+'%' } },
+      y: { grid: { display: false } }
+    }
+  }
+});
+</script>
+
+</body>
+</html>

@@ -11,7 +11,8 @@ DB_MAX_CONNECTIONS=<DB-Max-Connnections-for-Connection-Pool>
 DB_STALE_TIMEOUT=<DB-Stale-Timeout-Unused-Connections>
 
 # API Keys
-OPENAI_API_KEY=<OpenAI-API-Key>
+GROQ_API_KEY=<Groq-API-Key>          # Primary LLM — free at console.groq.com
+OPENAI_API_KEY=<OpenAI-API-Key>       # Used only for TTS (audio.speech)
 
 # Google auth
 GOOGLE_APPLICATION_CREDENTIALS=<Google-Application-Auth-Key-JSON-File>

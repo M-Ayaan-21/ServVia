@@ -1,0 +1,177 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  :root {
+    --red: #dc2626;
+    --red-dark: #991b1b;
+    --red-glow: rgba(220, 38, 38, 0.35);
+    --bg: #050505;
+    --text-muted: rgba(255, 255, 255, 0.55);
+  }
+
+  html, body, #root {
+    height: 100%;
+    width: 100%;
+    background: #050505;
+    color: #fff;
+    font-family: 'Inter', sans-serif;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer utilities {
+  /* Gradient text utility */
+  .text-gradient {
+    background: linear-gradient(135deg, #fff 30%, #dc2626 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Custom scrollbar */
+  .scrollbar-red::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-red::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-red::-webkit-scrollbar-thumb {
+    background: rgba(220, 38, 38, 0.2);
+    border-radius: 10px;
+  }
+  .scrollbar-red::-webkit-scrollbar-thumb:hover {
+    background: rgba(220, 38, 38, 0.4);
+  }
+
+  /* Markdown prose inside bot messages */
+  .prose-servvia p {
+    margin: 0.75rem 0;
+    line-height: 1.8;
+    color: rgba(255, 255, 255, 0.9);
+  }
+  .prose-servvia ul,
+  .prose-servvia ol {
+    margin: 1rem 0;
+    padding-left: 2rem;
+  }
+  .prose-servvia li {
+    margin: 0.5rem 0;
+    line-height: 1.7;
+    color: rgba(255, 255, 255, 0.85);
+  }
+  .prose-servvia strong {
+    color: #dc2626;
+    font-weight: 600;
+  }
+  .prose-servvia em {
+    color: rgba(255, 255, 255, 0.55);
+    font-style: italic;
+  }
+  .prose-servvia h1 {
+    color: #dc2626;
+    margin: 1.5rem 0 0.75rem;
+    font-weight: 700;
+  }
+  .prose-servvia h2 {
+    color: #fff;
+    margin: 1.5rem 0 0.5rem;
+    padding: 0.6rem 1rem;
+    background: rgba(20, 184, 166, 0.06);
+    border-left: 3px solid #14b8a6;
+    border-radius: 0 10px 10px 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+  }
+  .prose-servvia h3 {
+    color: #fff;
+    margin: 1.25rem 0 0.5rem;
+    padding: 0.75rem 1rem;
+    background: rgba(220, 38, 38, 0.06);
+    border-left: 3px solid #dc2626;
+    border-radius: 0 10px 10px 0;
+    font-size: 1rem;
+    font-weight: 600;
+  }
+  .prose-servvia h4 {
+    color: rgba(255, 255, 255, 0.55);
+    margin: 0.75rem 0 0.25rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .prose-servvia code {
+    background: rgba(220, 38, 38, 0.1);
+    padding: 0.2rem 0.4rem;
+    border-radius: 6px;
+    font-size: 0.9em;
+    color: #ef4444;
+  }
+  .prose-servvia blockquote {
+    border-left: 3px solid rgba(220, 38, 38, 0.35);
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    background: rgba(220, 38, 38, 0.04);
+    border-radius: 0 10px 10px 0;
+    color: rgba(255, 255, 255, 0.8);
+  }
+  .prose-servvia hr {
+    border: none;
+    height: 1px;
+    background: rgba(220, 38, 38, 0.12);
+    margin: 1.25rem 0;
+  }
+  .prose-servvia a {
+    color: #38bdf8;
+    text-decoration: none;
+    border-bottom: 1px dashed rgba(56, 189, 248, 0.3);
+    transition: all 0.2s;
+  }
+  .prose-servvia a:hover {
+    color: #7dd3fc;
+  }
+  .prose-servvia table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  .prose-servvia th {
+    background: rgba(220, 38, 38, 0.1);
+    color: #dc2626;
+    padding: 0.5rem 1rem;
+    text-align: left;
+    border: 1px solid rgba(220, 38, 38, 0.15);
+  }
+  .prose-servvia td {
+    padding: 0.5rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  /* Streaming cursor — subtle, inline */
+  .stream-cursor::after {
+    content: '';
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    background: #dc2626;
+    margin-left: 3px;
+    vertical-align: text-bottom;
+    border-radius: 1px;
+    animation: cursorBlink 0.55s ease-in-out infinite;
+  }
+  @keyframes cursorBlink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
+  }
+}

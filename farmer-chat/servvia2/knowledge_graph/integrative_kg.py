@@ -122,7 +122,7 @@ class IntegrativeKnowledgeGraph:
     
     def __init__(self):
         self.herbs: Dict[str, HerbNode] = {}
-        self. diseases: Dict[str, DiseaseNode] = {}
+        self.diseases: Dict[str, DiseaseNode] = {}
         self.evidence: List[EvidenceEdge] = []
         self._load_core_data()
     
@@ -182,7 +182,7 @@ class IntegrativeKnowledgeGraph:
             onset_time="2-4 weeks for noticeable effect"
         ))
         
-        logger.info(f"iKG loaded: {len(self. herbs)} herbs, {len(self.evidence)} evidence edges")
+        logger.info(f"iKG loaded: {len(self.herbs)} herbs, {len(self.evidence)} evidence edges")
     
     def get_evidence_for_condition(
         self, 
@@ -208,38 +208,38 @@ class IntegrativeKnowledgeGraph:
         
         for edge in self.evidence:
             # Check if matches condition
-            if condition. lower() not in edge.disease_id.lower():
+            if condition.lower() not in edge.disease_id.lower():
                 continue
-            
+
             # Check evidence tier
-            if edge.tier. value > min_tier:
+            if edge.tier.value > min_tier:
                 continue
-            
+
             # Get herb details
             herb = self.herbs.get(edge.herb_id)
             if not herb:
                 continue
-            
+
             # Check exclusions (allergies)
-            if herb.common_name. lower() in [e.lower() for e in exclude_herbs]:
+            if herb.common_name.lower() in [e.lower() for e in exclude_herbs]:
                 continue
-            
+
             # Check drug interactions
             interaction_warnings = []
             for interaction in herb.drug_interactions:
                 for user_med in user_medications:
-                    if interaction['drug']. lower() in user_med.lower():
+                    if interaction['drug'].lower() in user_med.lower():
                         interaction_warnings.append({
                             'drug': user_med,
                             'effect': interaction['effect'],
                             'severity': interaction['severity']
                         })
-            
+
             results.append({
                 'herb': herb,
                 'evidence': edge,
                 'interaction_warnings': interaction_warnings,
-                'badge': edge.tier. badge
+                'badge': edge.tier.badge
             })
         
         # Sort by confidence score
@@ -254,21 +254,21 @@ class IntegrativeKnowledgeGraph:
         Formula:
         SCS = (Tier_Weight × 0.4) + (PubMed_Count × 0.3) + (Mechanism_Clarity × 0.2) + (Traditional_Sources × 0.1)
         """
-        tier_weights = {1: 10, 2: 7. 5, 3: 5, 4: 2.5, 5: 0}
-        
-        tier_score = tier_weights.get(evidence.tier.value, 2. 5) * 0.4
+        tier_weights = {1: 10, 2: 7.5, 3: 5, 4: 2.5, 5: 0}
+
+        tier_score = tier_weights.get(evidence.tier.value, 2.5) * 0.4
         pubmed_score = min(len(evidence.pubmed_ids) * 0.5, 3) * 0.3
         mechanism_score = (3 if evidence.mechanism_description else 0) * 0.2
-        traditional_score = min(len(evidence. traditional_sources) * 0.5, 1) * 0. 1
+        traditional_score = min(len(evidence.traditional_sources) * 0.5, 1) * 0.1
         
         total = tier_score + pubmed_score + mechanism_score + traditional_score
         
         return {
             'score': round(total, 1),
-            'tier': evidence.tier. value,
-            'tier_label': evidence.tier. badge['label'],
+            'tier': evidence.tier.value,
+            'tier_label': evidence.tier.badge['label'],
             'badge_color': evidence.tier.badge['color'],
-            'badge_icon': evidence. tier.badge['icon'],
-            'pubmed_count': len(evidence. pubmed_ids),
+            'badge_icon': evidence.tier.badge['icon'],
+            'pubmed_count': len(evidence.pubmed_ids),
             'has_mechanism': bool(evidence.mechanism_description)
         }

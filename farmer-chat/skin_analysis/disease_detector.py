@@ -960,20 +960,80 @@ Analyze this image now - PAY SPECIAL ATTENTION TO LESION COUNT AND SIZE:"""
         }
 
 
+def detect_skin_disease_edge_first(image_path: str, confidence_threshold: int = 82) -> dict:
+    """
+    Confidence-gated edge-cloud routing.
+
+    Tries Qwen 3.5-0.8B locally first. If the edge model returns confidence
+    >= confidence_threshold, the result is returned immediately (air-gapped).
+    Otherwise, the request is escalated to Gemini.
+
+    All callers get a consistent result dict. The 'inference_source' field
+    tells you which path was taken:
+      - 'edge'            : Qwen handled it locally
+      - 'cloud'           : Gemini handled it (edge unavailable from the start)
+      - 'cloud_escalated' : Qwen ran but confidence was too low, Gemini took over
+    """
+    from skin_analysis.qwen_detector import detect_skin_disease_qwen, is_ollama_running
+
+    configured_threshold = int(os.getenv("SKIN_EDGE_CONFIDENCE_THRESHOLD", str(confidence_threshold)))
+    edge_attempted = False
+
+    ollama_available = is_ollama_running()
+    if ollama_available:
+        logger.info("[Router] Ollama available - attempting edge inference first")
+        edge_attempted = True
+        edge_result = detect_skin_disease_qwen(image_path)
+
+        if edge_result.get('success'):
+            numeric_conf = edge_result.get('confidence_numeric', 0)
+            logger.info(
+                f"[Router] Edge result: {edge_result.get('disease')} "
+                f"({numeric_conf}% confidence)"
+            )
+
+            if numeric_conf >= configured_threshold:
+                logger.info(
+                    f"[Router] Confidence {numeric_conf}% >= threshold {configured_threshold}% "
+                    "- returning edge result"
+                )
+                edge_result['inference_source'] = 'edge'
+                return edge_result
+            else:
+                logger.info(
+                    f"[Router] Confidence {numeric_conf}% < threshold {configured_threshold}% "
+                    "- escalating to Gemini"
+                )
+        else:
+            logger.warning(
+                f"[Router] Edge inference failed ({edge_result.get('error')}) "
+                "- escalating to Gemini"
+            )
+    else:
+        logger.info("[Router] Ollama not available - routing directly to Gemini")
+
+    # Gemini fallback
+    cloud_result = detect_skin_disease_gemini(image_path)
+    # Mark the source so views/frontend know what handled this request
+    if cloud_result.get('success'):
+        cloud_result['inference_source'] = 'cloud_escalated' if edge_attempted else 'cloud'
+    return cloud_result
+
+
 def detect_skin_disease_multi(image_path: str, method: str = 'gemini'):
     """Multi-method skin disease detection"""
-    logger.info(f"🔬 Starting detection with method: {method}")
-    
+    logger.info(f"Starting detection with method: {method}")
+
     if method in ['gemini', 'auto']:
         result = detect_skin_disease_gemini(image_path)
-        
-        if result. get('success'):
-            logger. info(f"✅ Detection successful: {result.get('disease')}")
+
+        if result.get('success'):
+            logger.info(f"Detection successful: {result.get('disease')}")
         else:
-            logger.error(f"❌ Detection failed: {result.get('error')}")
-        
+            logger.error(f"Detection failed: {result.get('error')}")
+
         return result
-    
+
     return {
         'success': False,
         'error': f'Unknown method: {method}. Use "gemini" or "auto"'

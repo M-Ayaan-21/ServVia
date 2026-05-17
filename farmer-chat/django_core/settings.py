@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     "user_profile",
     "skin_analysis",
     "lab_report",
+    "graph_rag",
 
 ]
 

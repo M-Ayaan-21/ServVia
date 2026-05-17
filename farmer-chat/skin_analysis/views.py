@@ -2,12 +2,19 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from .models import SkinAnalysis
-from .disease_detector import SkinDiseaseDetector, detect_skin_disease_gemini, validate_skin_image
+from .disease_detector import SkinDiseaseDetector, detect_skin_disease_gemini, detect_skin_disease_edge_first, validate_skin_image
 import logging
 import tempfile
 import os
 from PIL import Image
 import io
+
+# Register HEIC/HEIF support if available
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass
 
 logger = logging.getLogger(__name__)
 detector = SkinDiseaseDetector()
@@ -44,15 +51,40 @@ def analyze_skin_image(request):
         # Process image: convert to RGB and save temporarily
         try:
             image_data = image_file.read()
-            image = Image.open(io.BytesIO(image_data))
-            if image.mode != 'RGB':
+            if not image_data:
+                return Response({'success': False, 'error': 'Uploaded file is empty.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                image = Image.open(io.BytesIO(image_data))
+                image.load()  # Force decode so format errors surface here
+            except Exception:
+                # Last resort: write raw bytes to a temp file and let PIL infer from disk
+                with tempfile.NamedTemporaryFile(delete=False, suffix='') as raw_tmp:
+                    raw_tmp.write(image_data)
+                    raw_tmp_path = raw_tmp.name
+                try:
+                    image = Image.open(raw_tmp_path)
+                    image.load()
+                finally:
+                    try:
+                        os.unlink(raw_tmp_path)
+                    except Exception:
+                        pass
+
+            if image.mode not in ('RGB', 'L'):
                 image = image.convert('RGB')
+            elif image.mode == 'L':
+                image = image.convert('RGB')
+
             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
-                image.save(tmp.name)
+                image.save(tmp.name, format='JPEG', quality=95)
                 temp_path = tmp.name
         except Exception as e:
             logger.error(f"Image processing error: {e}")
-            return Response({'success': False, 'error': 'Invalid image file.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'success': False, 'error': f'Could not read image. Supported formats: JPG, PNG, WebP, HEIC, BMP, TIFF, GIF.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Validate that it's actually a skin image
         validation = validate_skin_image(temp_path)
@@ -65,8 +97,8 @@ def analyze_skin_image(request):
                 'suggestion': 'Please upload a clear photograph of the affected skin area.'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Detect skin disease using Gemini
-        result = detect_skin_disease_gemini(temp_path)
+        # Detect skin disease - tries Qwen (edge) first, escalates to Gemini if needed
+        result = detect_skin_disease_edge_first(temp_path)
 
         # Clean up temp file
         if temp_path and os.path.exists(temp_path):
@@ -101,6 +133,13 @@ def analyze_skin_image(request):
             recommendations=formatted_summary
         )
 
+        inference_source = result.get('inference_source', 'cloud')
+        source_label_map = {
+            'edge': 'Edge AI (on-device)',
+            'cloud': 'Cloud AI (Gemini)',
+            'cloud_escalated': 'Cloud AI (Gemini) - escalated from Edge',
+        }
+
         return Response({
             'success': True,
             'diagnosis': disease,
@@ -114,7 +153,9 @@ def analyze_skin_image(request):
             'distinguishing_features': result.get('distinguishing_features', ''),
             'differential_diagnosis': result.get('differential_diagnosis', []),
             'key_features': result.get('key_features', []),
-            'trust_validation': trust_validation
+            'trust_validation': trust_validation,
+            'inference_source': inference_source,
+            'inference_source_label': source_label_map.get(inference_source, inference_source),
         })
 
     except Exception as e:
@@ -173,52 +214,74 @@ def validate_skin_recommendations(disease, user_profile):
         }
 
         mapped_condition = condition_map.get(disease, disease.lower())
-        evidence_remedies = trust_engine.get_evidence_for_condition(mapped_condition)
+
+        # Scan the evidence database for all entries relevant to this condition
+        all_evidence = trust_engine.evidence_data.get('evidence', [])
+        evidence_remedies = []
+        for entry in all_evidence:
+            entry_condition = entry.get('condition', '').lower().replace(' ', '_')
+            entry_aliases = [c.lower().replace(' ', '_') for c in entry.get('condition_aliases', [])]
+            target = mapped_condition.lower().replace(' ', '_')
+            if (target in entry_condition or entry_condition in target or
+                    target in entry_aliases or
+                    trust_engine._conditions_related(target, entry_condition)):
+                evidence_remedies.append(entry)
 
         user_meds = user_profile.get('current_medications', [])
         user_allergies = user_profile.get('allergies', [])
 
+        # Map evidence_level string to numeric tier
+        level_to_tier = {'high': 1, 'moderate': 2, 'low': 3, 'very_low': 4, 'insufficient': 5}
+        tier_labels = {1: "Clinical Trials", 2: "Mechanistic Studies", 3: "Traditional Use", 4: "Anecdotal", 5: "Theoretical"}
+        base_scores = {1: 9.5, 2: 8.0, 3: 6.0, 4: 4.0, 5: 2.0}
+
         validated_remedies = []
         warnings = []
 
-        for remedy in evidence_remedies:
-            herb_name = remedy['herb']
+        for entry in evidence_remedies:
+            herb_name = entry.get('herb', '')
+            if not herb_name:
+                continue
 
             # Allergy check
             if herb_name.lower() in [a.lower() for a in user_allergies]:
-                warnings.append(f"⚠️ Skipped {herb_name.title()} - you're allergic")
+                warnings.append(f"Skipped {herb_name.title()} - you're allergic")
                 continue
 
-            # Drug interaction check
-            interaction = None
+            # Drug interaction check using the entry's interactions list directly
+            interaction_hit = None
             for med in user_meds:
-                interaction_check = trust_engine.check_single_interaction(herb_name, med)
-                if interaction_check:
-                    interaction = interaction_check
+                for ix in entry.get('interactions', []):
+                    if med.lower() in ix.get('substance', '').lower():
+                        interaction_hit = ix
+                        break
+                if interaction_hit:
                     break
 
-            tier = remedy['tier']
-            base_scores = {1: 9.5, 2: 8.0, 3: 6.0, 4: 4.0, 5: 2.0}
+            tier = level_to_tier.get(entry.get('evidence_level', 'low'), 3)
             score = base_scores.get(tier, 5.0)
 
-            if interaction:
-                if interaction.severity.value in ['critical', 'high']:
-                    warnings.append(f"🚫 **{herb_name.title()}** contraindicated with {interaction.drug}: {interaction.effect}")
+            if interaction_hit:
+                severity = interaction_hit.get('severity', 'moderate').lower()
+                if severity in ('critical', 'high'):
+                    warnings.append(f"{herb_name.title()} contraindicated with {interaction_hit.get('substance')}: {interaction_hit.get('description', '')}")
                     continue
                 else:
                     score -= 1.5
-                    warnings.append(f"⚠️ Use **{herb_name.title()}** with caution if taking {interaction.drug}")
+                    warnings.append(f"Use {herb_name.title()} with caution if taking {interaction_hit.get('substance')}")
 
-            tier_labels = {1: "Clinical Trials", 2: "Mechanistic Studies", 3: "Traditional Use", 4: "Anecdotal", 5: "Theoretical"}
+            # Extract dose: prefer adult dose, fall back to summary
+            dosing = entry.get('dosing', {})
+            dose_str = dosing.get('adults') or dosing.get('general') or entry.get('summary', '')
 
             validated_remedies.append({
                 'name': herb_name,
                 'score': round(score, 1),
                 'tier': tier,
                 'tier_label': tier_labels.get(tier, "Unknown"),
-                'mechanism': remedy.get('mechanism', ''),
-                'dose': remedy.get('dose', ''),
-                'has_interaction': interaction is not None
+                'mechanism': entry.get('summary', ''),
+                'dose': dose_str,
+                'has_interaction': interaction_hit is not None
             })
 
         validated_remedies.sort(key=lambda x: x['score'], reverse=True)

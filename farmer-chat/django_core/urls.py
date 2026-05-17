@@ -26,6 +26,9 @@ urlpatterns = [
     path("api/skin/", include("skin_analysis.urls")),
     path("api/lab-report/", include("lab_report.urls")),
 
+    # Graph RAG — Outcome Adaptive Feedback
+    path("api/feedback/", include("graph_rag.urls")),
+
     # Frontend
     path("", TemplateView.as_view(template_name="index.html"), name="index"),
 

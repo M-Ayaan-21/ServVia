@@ -1,0 +1,322 @@
+{
+  "timestamp": "2026-05-17T07:17:25.961919",
+  "triage": {
+    "overall_accuracy": 1.0,
+    "total_samples": 43,
+    "correct": 43,
+    "macro_f1": 1.0,
+    "weighted_f1": 1.0,
+    "emergency_detection": {
+      "accuracy": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "specificity": 1.0,
+      "total_samples": 43,
+      "true_positives": 18,
+      "true_negatives": 25,
+      "false_positives": 0,
+      "false_negatives": 0
+    },
+    "per_class": {
+      "emergency": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1_score": 1.0,
+        "support": 18
+      },
+      "mental_health": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1_score": 1.0,
+        "support": 4
+      },
+      "serious": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1_score": 1.0,
+        "support": 6
+      },
+      "benign": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1_score": 1.0,
+        "support": 15
+      }
+    },
+    "confusion_matrix": {
+      "emergency": {
+        "emergency": 18
+      },
+      "mental_health": {
+        "mental_health": 4
+      },
+      "serious": {
+        "serious": 6
+      },
+      "benign": {
+        "benign": 15
+      }
+    },
+    "cluster_inventory": {
+      "total_clusters": 27,
+      "emergency_clusters": 9,
+      "mental_health_clusters": 2,
+      "serious_clusters": 16
+    }
+  },
+  "chronobiology": {
+    "circadian_phase": {
+      "accuracy": 0.9583,
+      "correct": 23,
+      "total": 24
+    },
+    "sleep_pressure": {
+      "accuracy": 1.0,
+      "correct": 10,
+      "total": 10
+    },
+    "seasonal_influence": {
+      "accuracy": 1.0,
+      "correct": 12,
+      "total": 12
+    },
+    "misalignment_detection": {
+      "accuracy": 1.0,
+      "correct": 14,
+      "total": 14
+    },
+    "overall_accuracy": 0.9833,
+    "total_test_points": 60
+  },
+  "trust_engine": {
+    "herb_verification": {
+      "accuracy": 1.0,
+      "verified": 10,
+      "total_known_herbs": 10
+    },
+    "evidence_coverage": {
+      "rate": 1.0,
+      "with_evidence": 10,
+      "total": 10
+    },
+    "fabricated_herb_rejection": {
+      "accuracy": 1.0,
+      "rejected": 5,
+      "total": 5
+    },
+    "herb_herb_interaction": {
+      "accuracy": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "specificity": 1.0,
+      "total_samples": 4,
+      "true_positives": 2,
+      "true_negatives": 2,
+      "false_positives": 0,
+      "false_negatives": 0
+    }
+  },
+  "safety": {
+    "drug_herb_interaction": {
+      "accuracy": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "specificity": 1.0,
+      "total_samples": 10,
+      "true_positives": 5,
+      "true_negatives": 5,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "details": [
+        {
+          "description": "Turmeric + Warfarin \u2192 should flag (bleeding risk)",
+          "expected_safe": false,
+          "predicted_safe": false,
+          "outcome": "TP",
+          "warnings": [
+            "\u26a0\ufe0f **Caution**: Turmeric + warfarin: Increases bleeding risk",
+            "\u26a0\ufe0f **Caution**: Ginger + warfarin: May increase bleeding risk (INR)"
+          ]
+        },
+        {
+          "description": "SJW + SSRI \u2192 should flag (serotonin syndrome)",
+          "expected_safe": false,
+          "predicted_safe": false,
+          "outcome": "TP",
+          "warnings": [
+            "\ud83d\udeab **CRITICAL**: St. John'S Wort + sertraline: Serotonin syndrome risk \u2014 potentially life-threatening; DO NOT combine",
+            "\ud83d\udeab **CRITICAL**: St. John'S Wort + fluoxetine: Serotonin syndrome risk \u2014 potentially life-threatening; DO NOT combine"
+          ]
+        },
+        {
+          "description": "Ginkgo + Aspirin \u2192 should flag (bleeding risk)",
+          "expected_safe": false,
+          "predicted_safe": false,
+          "outcome": "TP",
+          "warnings": [
+            "\u26a0\ufe0f **Caution**: Ginkgo + aspirin: Additive antiplatelet effect; increased bleeding risk",
+            "\u26a0\ufe0f **Caution**: Ginkgo + aspirin: Additive antiplatelet and GI bleeding risk",
+            "\u26a0\ufe0f **Caution**: Ginkgo Biloba + aspirin: Additive antiplatelet effect; increased bleeding risk"
+          ]
+        },
+        {
+          "description": "Kava + Benzodiazepine \u2192 should flag (CNS depression)",
+          "expected_safe": false,
+          "predicted_safe": false,
+          "outcome": "TP",
+          "warnings": [
+            "\ud83d\udeab **CRITICAL**: Kava + alprazolam: Excessive sedation and respiratory depression risk",
+            "\ud83d\udeab **CRITICAL**: Kava + alprazolam: Additive CNS depression; dangerous combination"
+          ]
+        },
+        {
+          "description": "Licorice + diuretic \u2192 should flag (hypokalemia)",
+          "expected_safe": false,
+          "predicted_safe": false,
+          "outcome": "TP",
+          "warnings": [
+            "\ud83d\udeab **CRITICAL**: Licorice Root + hydrochlorothiazide: Licorice antagonises blood-pressure-lowering drugs; can cause dangerously high BP",
+            "\ud83d\udeab **CRITICAL**: Licorice Root + hydrochlorothiazide: Additive potassium loss; severe hypokalemia risk",
+            "\ud83d\udeab **CRITICAL**: Licorice + hydrochlorothiazide: Licorice antagonises blood-pressure-lowering drugs; can cause dangerously high BP"
+          ]
+        },
+        {
+          "description": "Ginger + Peppermint, no meds \u2192 safe",
+          "expected_safe": true,
+          "predicted_safe": true,
+          "outcome": "TN",
+          "warnings": []
+        },
+        {
+          "description": "Honey + Lemon + Paracetamol \u2192 safe",
+          "expected_safe": true,
+          "predicted_safe": true,
+          "outcome": "TN",
+          "warnings": []
+        },
+        {
+          "description": "Chamomile, no meds \u2192 safe",
+          "expected_safe": true,
+          "predicted_safe": true,
+          "outcome": "TN",
+          "warnings": []
+        },
+        {
+          "description": "Aloe topical + Metformin \u2192 safe (topical only)",
+          "expected_safe": true,
+          "predicted_safe": true,
+          "outcome": "TN",
+          "warnings": []
+        },
+        {
+          "description": "Tulsi, no meds \u2192 safe",
+          "expected_safe": true,
+          "predicted_safe": true,
+          "outcome": "TN",
+          "warnings": []
+        }
+      ]
+    },
+    "allergy_detection": {
+      "sensitivity": 1.0,
+      "detected": 2,
+      "total_cases": 2
+    }
+  },
+  "pipeline": {
+    "latency": {
+      "mean_ms": 13851.2,
+      "median_ms": 14461.7,
+      "p95_ms": 23173.9,
+      "min_ms": 7693.2,
+      "max_ms": 23173.9,
+      "samples": 7
+    },
+    "total_queries": 7,
+    "pipeline_queries": 7,
+    "emergency_fast_path": 0,
+    "has_remedies_rate": 1.0,
+    "fallback_rate": 0.0,
+    "avg_revision_cycles": 0.0,
+    "avg_safety_revisions": 0.0,
+    "first_pass_approval_rate": 1.0
+  },
+  "response_quality": {
+    "avg_quality_score": 94.3,
+    "total_responses_evaluated": 5,
+    "criteria_pass_rates": {
+      "has_remedies": 1.0,
+      "response_length_adequate": 1.0,
+      "has_doctor_escalation": 1.0,
+      "has_specific_quantities": 0.8,
+      "has_multiple_remedies": 1.0,
+      "no_emergency_escalation": 0.8,
+      "has_safety_note": 1.0
+    },
+    "individual_scores": [
+      {
+        "has_remedies": 1,
+        "response_length_adequate": 1,
+        "has_doctor_escalation": 1,
+        "has_specific_quantities": 1,
+        "has_multiple_remedies": 1,
+        "no_emergency_escalation": 1,
+        "has_safety_note": 1,
+        "total": 7,
+        "max": 7,
+        "percentage": 100.0
+      },
+      {
+        "has_remedies": 1,
+        "response_length_adequate": 1,
+        "has_doctor_escalation": 1,
+        "has_specific_quantities": 1,
+        "has_multiple_remedies": 1,
+        "no_emergency_escalation": 1,
+        "has_safety_note": 1,
+        "total": 7,
+        "max": 7,
+        "percentage": 100.0
+      },
+      {
+        "has_remedies": 1,
+        "response_length_adequate": 1,
+        "has_doctor_escalation": 1,
+        "has_specific_quantities": 1,
+        "has_multiple_remedies": 1,
+        "no_emergency_escalation": 1,
+        "has_safety_note": 1,
+        "total": 7,
+        "max": 7,
+        "percentage": 100.0
+      },
+      {
+        "has_remedies": 1,
+        "response_length_adequate": 1,
+        "has_doctor_escalation": 1,
+        "has_specific_quantities": 0,
+        "has_multiple_remedies": 1,
+        "no_emergency_escalation": 0,
+        "has_safety_note": 1,
+        "total": 5,
+        "max": 7,
+        "percentage": 71.4
+      },
+      {
+        "has_remedies": 1,
+        "response_length_adequate": 1,
+        "has_doctor_escalation": 1,
+        "has_specific_quantities": 1,
+        "has_multiple_remedies": 1,
+        "no_emergency_escalation": 1,
+        "has_safety_note": 1,
+        "total": 7,
+        "max": 7,
+        "percentage": 100.0
+      }
+    ]
+  }
+}

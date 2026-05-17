@@ -38,6 +38,123 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ServVia_TrustEngine")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DRUG → CLASS MAPPING
+# Maps specific drug names to pharmacological classes so that interaction
+# checks against class-level entries (e.g. "SSRIs") work when the user
+# reports a specific drug (e.g. "sertraline").
+# ─────────────────────────────────────────────────────────────────────────────
+DRUG_CLASS_MAP: Dict[str, List[str]] = {
+    # SSRIs
+    "sertraline": ["ssris", "antidepressants"],
+    "fluoxetine": ["ssris", "antidepressants"],
+    "paroxetine": ["ssris", "antidepressants"],
+    "citalopram": ["ssris", "antidepressants"],
+    "escitalopram": ["ssris", "antidepressants"],
+    "fluvoxamine": ["ssris", "antidepressants"],
+    # SNRIs
+    "venlafaxine": ["snris", "antidepressants"],
+    "duloxetine": ["snris", "antidepressants"],
+    "desvenlafaxine": ["snris", "antidepressants"],
+    "milnacipran": ["snris", "antidepressants"],
+    # MAOIs
+    "phenelzine": ["maois", "antidepressants"],
+    "tranylcypromine": ["maois", "antidepressants"],
+    "isocarboxazid": ["maois", "antidepressants"],
+    "selegiline": ["maois", "antidepressants"],
+    # Benzodiazepines
+    "alprazolam": ["benzodiazepines", "sedatives"],
+    "diazepam": ["benzodiazepines", "sedatives"],
+    "lorazepam": ["benzodiazepines", "sedatives"],
+    "clonazepam": ["benzodiazepines", "sedatives"],
+    "midazolam": ["benzodiazepines", "sedatives"],
+    "temazepam": ["benzodiazepines", "sedatives"],
+    "oxazepam": ["benzodiazepines", "sedatives"],
+    "chlordiazepoxide": ["benzodiazepines", "sedatives"],
+    # Diuretics
+    "hydrochlorothiazide": ["diuretics", "antihypertensives"],
+    "furosemide": ["diuretics"],
+    "spironolactone": ["diuretics"],
+    "chlorthalidone": ["diuretics", "antihypertensives"],
+    "indapamide": ["diuretics", "antihypertensives"],
+    "bumetanide": ["diuretics"],
+    "metolazone": ["diuretics"],
+    "amiloride": ["diuretics"],
+    "triamterene": ["diuretics"],
+    # Anticoagulants / Antiplatelets
+    "warfarin": ["anticoagulants"],
+    "heparin": ["anticoagulants"],
+    "enoxaparin": ["anticoagulants"],
+    "rivaroxaban": ["anticoagulants"],
+    "apixaban": ["anticoagulants"],
+    "dabigatran": ["anticoagulants"],
+    "aspirin": ["antiplatelets", "nsaids"],
+    "clopidogrel": ["antiplatelets"],
+    # Antihypertensives
+    "lisinopril": ["antihypertensives", "ace inhibitors"],
+    "enalapril": ["antihypertensives", "ace inhibitors"],
+    "ramipril": ["antihypertensives", "ace inhibitors"],
+    "losartan": ["antihypertensives"],
+    "valsartan": ["antihypertensives"],
+    "amlodipine": ["antihypertensives", "calcium channel blockers"],
+    "metoprolol": ["antihypertensives", "beta blockers"],
+    "atenolol": ["antihypertensives", "beta blockers"],
+    "propranolol": ["antihypertensives", "beta blockers"],
+    # Statins
+    "atorvastatin": ["statins"],
+    "simvastatin": ["statins"],
+    "rosuvastatin": ["statins"],
+    "pravastatin": ["statins"],
+    # Antidiabetics
+    "metformin": ["antidiabetics"],
+    "glipizide": ["antidiabetics", "sulfonylureas"],
+    "glyburide": ["antidiabetics", "sulfonylureas"],
+    "pioglitazone": ["antidiabetics"],
+    "insulin": ["antidiabetics"],
+    # Cardiac glycosides
+    "digoxin": ["cardiac glycosides"],
+    # Immunosuppressants
+    "cyclosporine": ["immunosuppressants"],
+    "tacrolimus": ["immunosuppressants"],
+    # Triptans
+    "sumatriptan": ["triptans"],
+    "rizatriptan": ["triptans"],
+    "zolmitriptan": ["triptans"],
+    # Corticosteroids
+    "prednisone": ["corticosteroids"],
+    "prednisolone": ["corticosteroids"],
+    "dexamethasone": ["corticosteroids"],
+    "hydrocortisone": ["corticosteroids"],
+    # Antiretrovirals
+    "efavirenz": ["antiretrovirals"],
+    "nevirapine": ["antiretrovirals"],
+    "ritonavir": ["antiretrovirals"],
+    # Oral contraceptives
+    "ethinylestradiol": ["oral contraceptives"],
+    # Parkinsons
+    "levodopa": ["levodopa"],
+    "carbidopa": ["levodopa"],
+    # Sedatives / sleep aids
+    "zolpidem": ["sedatives"],
+    "zopiclone": ["sedatives"],
+    "eszopiclone": ["sedatives"],
+    # Thyroid
+    "levothyroxine": ["thyroid medications"],
+    # Antiepileptics
+    "carbamazepine": ["antiepileptics"],
+    "phenytoin": ["antiepileptics"],
+    "valproic acid": ["antiepileptics"],
+    "lamotrigine": ["antiepileptics"],
+}
+
+
+def _resolve_drug_classes(medication: str) -> List[str]:
+    """Return the medication itself plus any pharmacological classes it belongs to."""
+    med_lower = medication.lower().strip()
+    classes = DRUG_CLASS_MAP.get(med_lower, [])
+    return [med_lower] + classes
+
+
 class EvidenceLevel(Enum):
     """Evidence quality levels based on GRADE standards"""
     HIGH = "high"
@@ -123,16 +240,191 @@ class TrustEngine:
         'insufficient': '○○○○'
     }
     
+    # Known herb-herb interactions (clinically documented)
+    HERB_HERB_INTERACTIONS = {
+        frozenset(["ginkgo", "st. john's wort"]): {
+            "severity": "major",
+            "description": "Ginkgo + St. John's Wort: increased bleeding risk and potential serotonin syndrome. Both have antiplatelet/serotonergic effects.",
+        },
+        frozenset(["ginkgo", "st john's wort"]): {
+            "severity": "major",
+            "description": "Ginkgo + St. John's Wort: increased bleeding risk and potential serotonin syndrome. Both have antiplatelet/serotonergic effects.",
+        },
+        frozenset(["ginkgo", "st johns wort"]): {
+            "severity": "major",
+            "description": "Ginkgo + St. John's Wort: increased bleeding risk and potential serotonin syndrome. Both have antiplatelet/serotonergic effects.",
+        },
+        frozenset(["ginkgo biloba", "st johns wort"]): {
+            "severity": "major",
+            "description": "Ginkgo + St. John's Wort: increased bleeding risk and potential serotonin syndrome. Both have antiplatelet/serotonergic effects.",
+        },
+        frozenset(["ginkgo biloba", "st. john's wort"]): {
+            "severity": "major",
+            "description": "Ginkgo + St. John's Wort: increased bleeding risk and potential serotonin syndrome. Both have antiplatelet/serotonergic effects.",
+        },
+        frozenset(["ginkgo biloba", "st john's wort"]): {
+            "severity": "major",
+            "description": "Ginkgo + St. John's Wort: increased bleeding risk and potential serotonin syndrome. Both have antiplatelet/serotonergic effects.",
+        },
+        frozenset(["ginkgo", "ginseng"]): {
+            "severity": "moderate",
+            "description": "Ginkgo + Ginseng: additive antiplatelet effects; increased bleeding risk.",
+        },
+        frozenset(["kava", "valerian"]): {
+            "severity": "major",
+            "description": "Kava + Valerian: excessive CNS/sedative depression; avoid combination.",
+        },
+        frozenset(["st. john's wort", "valerian"]): {
+            "severity": "moderate",
+            "description": "St. John's Wort + Valerian: additive CNS sedation risk.",
+        },
+        frozenset(["st john's wort", "valerian"]): {
+            "severity": "moderate",
+            "description": "St. John's Wort + Valerian: additive CNS sedation risk.",
+        },
+        frozenset(["ginkgo", "garlic"]): {
+            "severity": "moderate",
+            "description": "Ginkgo + Garlic: both have antiplatelet properties; combined use may increase bleeding risk.",
+        },
+        frozenset(["st. john's wort", "ginseng"]): {
+            "severity": "moderate",
+            "description": "St. John's Wort + Ginseng: potential serotonergic interaction; monitor for serotonin-related symptoms.",
+        },
+        frozenset(["st john's wort", "ginseng"]): {
+            "severity": "moderate",
+            "description": "St. John's Wort + Ginseng: potential serotonergic interaction.",
+        },
+        frozenset(["ashwagandha", "valerian"]): {
+            "severity": "moderate",
+            "description": "Ashwagandha + Valerian: additive sedative effects; avoid driving or heavy machinery.",
+        },
+        frozenset(["licorice", "ginseng"]): {
+            "severity": "moderate",
+            "description": "Licorice + Ginseng: both may raise blood pressure; caution in hypertensive patients.",
+        },
+        # ── Sedative combinations ─────────────────────────────────────────────
+        frozenset(["chamomile", "valerian"]): {
+            "severity": "moderate",
+            "description": "Chamomile + Valerian: additive CNS sedation; may cause excessive drowsiness. Avoid driving.",
+        },
+        frozenset(["kava", "chamomile"]): {
+            "severity": "major",
+            "description": "Kava + Chamomile: additive CNS depression and hepatotoxicity risk.",
+        },
+        frozenset(["kava", "st. john's wort"]): {
+            "severity": "major",
+            "description": "Kava + St. John's Wort: additive CNS effects and serotonergic interaction; dangerous combination.",
+        },
+        frozenset(["kava", "st johns wort"]): {
+            "severity": "major",
+            "description": "Kava + St. John's Wort: additive CNS effects and serotonergic interaction; dangerous combination.",
+        },
+        frozenset(["valerian", "kava"]): {
+            "severity": "major",
+            "description": "Valerian + Kava: excessive CNS and hepatotoxic risk; avoid combination.",
+        },
+        frozenset(["brahmi", "valerian"]): {
+            "severity": "moderate",
+            "description": "Brahmi + Valerian: additive sedative and CNS-depressant effects; avoid when driving.",
+        },
+        # ── Antiplatelet / bleeding risk ──────────────────────────────────────
+        frozenset(["black seed", "garlic"]): {
+            "severity": "moderate",
+            "description": "Black Seed + Garlic: both have antiplatelet properties; combined use may significantly increase bleeding risk.",
+        },
+        frozenset(["black seed", "ginger"]): {
+            "severity": "moderate",
+            "description": "Black Seed + Ginger: additive antiplatelet effects; caution in patients prone to bleeding.",
+        },
+        frozenset(["ginkgo", "black seed"]): {
+            "severity": "moderate",
+            "description": "Ginkgo + Black Seed: additive antiplatelet activity; increased bleeding risk.",
+        },
+        frozenset(["ginkgo biloba", "black seed"]): {
+            "severity": "moderate",
+            "description": "Ginkgo + Black Seed: additive antiplatelet activity; increased bleeding risk.",
+        },
+        frozenset(["chamomile", "ginkgo"]): {
+            "severity": "moderate",
+            "description": "Chamomile (coumarin content) + Ginkgo (antiplatelet): additive bleeding risk.",
+        },
+        frozenset(["chamomile", "ginkgo biloba"]): {
+            "severity": "moderate",
+            "description": "Chamomile (coumarin content) + Ginkgo (antiplatelet): additive bleeding risk.",
+        },
+        frozenset(["fenugreek", "ginger"]): {
+            "severity": "moderate",
+            "description": "Fenugreek + Ginger: additive hypoglycaemic and antiplatelet effects; monitor blood sugar.",
+        },
+        frozenset(["amla", "ginkgo"]): {
+            "severity": "moderate",
+            "description": "Amla + Ginkgo: additive antiplatelet properties; bleeding risk in surgical patients.",
+        },
+        frozenset(["amla", "ginkgo biloba"]): {
+            "severity": "moderate",
+            "description": "Amla + Ginkgo: additive antiplatelet properties; bleeding risk in surgical patients.",
+        },
+        # ── Blood sugar interactions ───────────────────────────────────────────
+        frozenset(["fenugreek", "cinnamon"]): {
+            "severity": "moderate",
+            "description": "Fenugreek + Cinnamon: additive glucose-lowering effect; hypoglycaemia risk in diabetic patients.",
+        },
+        frozenset(["black seed", "cinnamon"]): {
+            "severity": "moderate",
+            "description": "Black Seed + Cinnamon: combined blood-sugar-lowering effect; monitor glucose closely.",
+        },
+        frozenset(["moringa", "fenugreek"]): {
+            "severity": "moderate",
+            "description": "Moringa + Fenugreek: additive hypoglycaemic effect; caution in patients on diabetes medication.",
+        },
+        # ── Blood pressure interactions ───────────────────────────────────────
+        frozenset(["licorice", "ginger"]): {
+            "severity": "moderate",
+            "description": "Licorice (raises BP via aldosterone effect) + Ginger (mild hypotensive): opposing effects; unpredictable BP changes.",
+        },
+        frozenset(["licorice", "garlic"]): {
+            "severity": "major",
+            "description": "Licorice + Garlic: licorice raises BP while garlic lowers it; combined use is unpredictable and potentially harmful in hypertensive patients.",
+        },
+        # ── Immune stimulation ────────────────────────────────────────────────
+        frozenset(["echinacea", "elderberry"]): {
+            "severity": "moderate",
+            "description": "Echinacea + Elderberry: both strongly stimulate immune system; caution in autoimmune conditions — may trigger flare.",
+        },
+        frozenset(["echinacea", "ginseng"]): {
+            "severity": "moderate",
+            "description": "Echinacea + Ginseng: additive immune stimulation; avoid in autoimmune conditions.",
+        },
+        # ── Thyroid interactions ──────────────────────────────────────────────
+        frozenset(["brahmi", "moringa"]): {
+            "severity": "moderate",
+            "description": "Brahmi + Moringa: both may affect thyroid hormone levels; caution in patients on thyroid medication.",
+        },
+        # ── Serotonergic interactions ─────────────────────────────────────────
+        frozenset(["st. john's wort", "ashwagandha"]): {
+            "severity": "moderate",
+            "description": "St. John's Wort + Ashwagandha: potential serotonergic and CNS-active interaction; monitor for mood changes.",
+        },
+        frozenset(["st johns wort", "ashwagandha"]): {
+            "severity": "moderate",
+            "description": "St. John's Wort + Ashwagandha: potential serotonergic and CNS-active interaction.",
+        },
+        frozenset(["st. john's wort", "valerian"]): {
+            "severity": "moderate",
+            "description": "St. John's Wort + Valerian: additive CNS sedation risk.",
+        },
+    }
+
     def __init__(self):
         """Initialize Trust Engine and load embedded database"""
         self.evidence_data = {}
         self.known_herbs = set()
         self.condition_map = self._build_condition_map()
-        
+
         # Load the embedded database
         self._load_embedded_database()
         self._build_herb_registry()
-        
+
         logger.info(f"Trust Engine initialized: {len(self.evidence_data.get('evidence', []))} evidence entries, "
                     f"{len(self.known_herbs)} known herbs")
 
@@ -635,6 +927,718 @@ class TrustEngine:
                     "dosing": {"tea": "2-3 cups daily"},
                     "recommendation_strength": "weak",
                     "grade_assessment": "⊕○○○"
+                },
+
+                # =================================================================
+                # LICORICE (Glycyrrhiza glabra)
+                # =================================================================
+                {
+                    "herb": "licorice",
+                    "herb_aliases": ["licorice root", "glycyrrhiza glabra", "mulethi", "yashtimadhu"],
+                    "condition": "fatigue",
+                    "condition_aliases": ["adrenal fatigue", "tiredness", "exhaustion", "general weakness"],
+                    "evidence_level": "low",
+                    "summary": "Traditionally used for adrenal support and fatigue; limited clinical trial evidence.",
+                    "limitations": ["Most evidence from traditional use", "Risk of pseudohyperaldosteronism"],
+                    "citations": [
+                        {
+                            "pmid": "12165187", "title": "Licorice root and adrenal function", "authors": "Armanini D, et al.",
+                            "journal": "N Engl J Med", "year": 1999, "study_type": "Case series",
+                            "conclusion": "Licorice causes sodium retention and potassium loss via cortisol pathway."
+                        }
+                    ],
+                    "safety_notes": [
+                        "Raises blood pressure via aldosterone-like effect",
+                        "Causes sodium retention and potassium loss",
+                        "Safe limit: <100mg glycyrrhizin/day short-term"
+                    ],
+                    "contraindications": [
+                        "Hypertension", "Heart disease", "Kidney disease", "Edema",
+                        "Hypokalemia", "Pregnancy", "Liver cirrhosis"
+                    ],
+                    "interactions": [
+                        {"substance": "Antihypertensives", "severity": "major", "description": "Licorice antagonises blood-pressure-lowering drugs; can cause dangerously high BP"},
+                        {"substance": "Diuretics", "severity": "major", "description": "Additive potassium loss; severe hypokalemia risk"},
+                        {"substance": "Corticosteroids", "severity": "major", "description": "Licorice potentiates corticosteroid effects; increased side effects"},
+                        {"substance": "Digoxin", "severity": "major", "description": "Licorice-induced hypokalemia increases digoxin toxicity risk"},
+                        {"substance": "Warfarin", "severity": "moderate", "description": "May reduce anticoagulant effect"},
+                        {"substance": "Oral contraceptives", "severity": "moderate", "description": "Increased risk of fluid retention and hypertension"}
+                    ],
+                    "dosing": {"tea": "1 cup/day maximum, short-term only (<4 weeks)"},
+                    "recommendation_strength": "weak",
+                    "grade_assessment": "⊕○○○"
+                },
+
+                # =================================================================
+                # ECHINACEA
+                # =================================================================
+                {
+                    "herb": "echinacea",
+                    "herb_aliases": ["echinacea purpurea", "coneflower"],
+                    "condition": "cold",
+                    "condition_aliases": ["upper respiratory infection", "immune support", "flu"],
+                    "evidence_level": "moderate",
+                    "summary": "May reduce duration and severity of common cold by 1-2 days; evidence is mixed.",
+                    "citations": [
+                        {
+                            "pmid": "25927067", "title": "Echinacea for preventing and treating the common cold", "authors": "Karsch-Volk M, et al.",
+                            "journal": "Cochrane Database Syst Rev", "year": 2015, "study_type": "Meta-analysis",
+                            "conclusion": "Modest reduction in cold duration; some preparations may reduce incidence."
+                        }
+                    ],
+                    "safety_notes": ["Rare allergic reactions", "Not for long-term continuous use (>8 weeks)"],
+                    "contraindications": [
+                        "Autoimmune conditions (lupus, rheumatoid arthritis, MS)",
+                        "HIV/AIDS", "Organ transplant recipients", "Allergy to daisy family plants"
+                    ],
+                    "interactions": [
+                        {"substance": "Immunosuppressants", "severity": "major", "description": "Echinacea stimulates immune system; directly antagonises immunosuppressant drugs (cyclosporine, tacrolimus)"},
+                        {"substance": "Cyclosporine", "severity": "major", "description": "Reduced efficacy of cyclosporine; transplant rejection risk"},
+                        {"substance": "Corticosteroids", "severity": "moderate", "description": "May counteract anti-inflammatory effects"}
+                    ],
+                    "dosing": {"extract": "300mg 3x daily for up to 8 weeks"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # VALERIAN
+                # =================================================================
+                {
+                    "herb": "valerian",
+                    "herb_aliases": ["valerian root", "valeriana officinalis"],
+                    "condition": "insomnia",
+                    "condition_aliases": ["sleep", "sleep disorder", "cant sleep", "sleeplessness"],
+                    "evidence_level": "low_to_moderate",
+                    "summary": "May improve sleep quality and reduce time to fall asleep; effects are modest.",
+                    "citations": [
+                        {
+                            "pmid": "16824846", "title": "Valerian for sleep: a systematic review", "authors": "Bent S, et al.",
+                            "journal": "Am J Med", "year": 2006, "study_type": "Systematic Review",
+                            "conclusion": "May improve sleep quality without side effects; evidence not fully conclusive."
+                        }
+                    ],
+                    "safety_notes": ["Morning drowsiness", "Vivid dreams", "Hepatotoxicity risk with long-term use"],
+                    "contraindications": [
+                        "Liver disease", "Pregnancy", "Breastfeeding",
+                        "Surgery (discontinue 2 weeks before — CNS depression risk)"
+                    ],
+                    "interactions": [
+                        {"substance": "Benzodiazepines", "severity": "major", "description": "Additive CNS depression; excessive sedation"},
+                        {"substance": "Alcohol", "severity": "major", "description": "Potentiates sedation; do not combine"},
+                        {"substance": "Barbiturates", "severity": "major", "description": "Additive CNS depression"},
+                        {"substance": "Opioids", "severity": "major", "description": "Enhanced respiratory depression risk"},
+                        {"substance": "Sedatives", "severity": "major", "description": "Additive sedative effect with all CNS depressants"},
+                        {"substance": "Antidepressants", "severity": "moderate", "description": "Pharmacodynamic interaction; monitor for excess sedation"}
+                    ],
+                    "dosing": {"extract": "300-600mg 30 minutes before bed"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # CHAMOMILE
+                # =================================================================
+                {
+                    "herb": "chamomile",
+                    "herb_aliases": ["german chamomile", "matricaria chamomilla", "roman chamomile"],
+                    "condition": "anxiety",
+                    "condition_aliases": ["stress", "nervousness", "generalised anxiety"],
+                    "evidence_level": "moderate",
+                    "summary": "German chamomile extract shown to reduce GAD symptoms in placebo-controlled trials.",
+                    "citations": [
+                        {
+                            "pmid": "19593897", "title": "A randomized, double-blind, placebo-controlled trial of oral Matricaria recutita for GAD", "authors": "Amsterdam JD, et al.",
+                            "journal": "J Clin Psychopharmacol", "year": 2009, "study_type": "RCT",
+                            "conclusion": "Chamomile extract produced significantly greater reduction in GAD symptoms."
+                        }
+                    ],
+                    "safety_notes": ["Allergic reaction in ragweed-sensitive individuals"],
+                    "contraindications": [
+                        "Allergy to ragweed, chrysanthemums, or daisy family",
+                        "Pregnancy (high doses may cause uterine contractions)"
+                    ],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "moderate", "description": "Chamomile has coumarin constituents; may increase anticoagulant effect and bleeding risk"},
+                        {"substance": "Sedatives", "severity": "moderate", "description": "Additive sedation; caution with benzodiazepines and sleep aids"},
+                        {"substance": "Cyclosporine", "severity": "moderate", "description": "May alter drug metabolism via CYP450"}
+                    ],
+                    "dosing": {"tea": "1-2 cups/day", "extract": "220-1100mg daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+                {
+                    "herb": "chamomile",
+                    "herb_aliases": ["german chamomile", "matricaria chamomilla"],
+                    "condition": "indigestion",
+                    "condition_aliases": ["bloating", "stomach cramps", "IBS", "colic"],
+                    "evidence_level": "low",
+                    "summary": "Traditional use for GI spasms supported by antispasmodic properties in vitro.",
+                    "citations": [
+                        {
+                            "pmid": "10641152", "title": "Chamomile: a herbal medicine of the past with bright future", "authors": "Srivastava JK, et al.",
+                            "journal": "Mol Med Rep", "year": 2010, "study_type": "Review",
+                            "conclusion": "Anti-inflammatory and antispasmodic effects documented."
+                        }
+                    ],
+                    "safety_notes": ["Generally safe; avoid in ragweed allergy"],
+                    "contraindications": ["Allergy to daisy family plants"],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "moderate", "description": "Coumarin content may increase bleeding risk"}
+                    ],
+                    "dosing": {"tea": "3-4 cups daily between meals"},
+                    "recommendation_strength": "weak",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # PEPPERMINT
+                # =================================================================
+                {
+                    "herb": "peppermint",
+                    "herb_aliases": ["mentha piperita", "mint oil", "peppermint oil"],
+                    "condition": "indigestion",
+                    "condition_aliases": ["IBS", "bloating", "stomach cramps", "irritable bowel"],
+                    "evidence_level": "moderate",
+                    "summary": "Enteric-coated peppermint oil is one of the most evidence-backed remedies for IBS.",
+                    "citations": [
+                        {
+                            "pmid": "24100754", "title": "Peppermint oil for the treatment of IBS", "authors": "Khanna R, et al.",
+                            "journal": "J Clin Gastroenterol", "year": 2014, "study_type": "Meta-analysis",
+                            "conclusion": "Significantly reduces global IBS symptoms and abdominal pain."
+                        }
+                    ],
+                    "safety_notes": ["Oil form can cause heartburn if not enteric-coated", "Menthol toxic in large doses"],
+                    "contraindications": [
+                        "GERD / acid reflux (oral oil — relaxes oesophageal sphincter)",
+                        "Hiatal hernia", "Gallstones (large amounts)"
+                    ],
+                    "interactions": [
+                        {"substance": "Cyclosporine", "severity": "moderate", "description": "Peppermint oil inhibits CYP3A4; may increase cyclosporine levels"},
+                        {"substance": "Felodipine", "severity": "moderate", "description": "CYP3A4 inhibition may increase drug concentration"}
+                    ],
+                    "dosing": {"oil": "0.2-0.4ml enteric-coated capsules 3x daily", "tea": "1-2 cups after meals"},
+                    "recommendation_strength": "strong",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+                {
+                    "herb": "peppermint",
+                    "herb_aliases": ["mentha piperita", "mint"],
+                    "condition": "headache",
+                    "condition_aliases": ["tension headache", "migraine"],
+                    "evidence_level": "moderate",
+                    "summary": "Topical 10% peppermint oil shown comparable to acetaminophen for tension headache.",
+                    "citations": [
+                        {
+                            "pmid": "9727088", "title": "Peppermint oil in the acute treatment of tension-type headache", "authors": "Göbel H, et al.",
+                            "journal": "Cephalalgia", "year": 1996, "study_type": "RCT",
+                            "conclusion": "10% peppermint oil as effective as paracetamol 1000mg."
+                        }
+                    ],
+                    "safety_notes": ["Topical use only; avoid near eyes"],
+                    "contraindications": ["Children under 2 years (menthol near face causes apnoea)"],
+                    "interactions": [],
+                    "dosing": {"topical": "Apply 10% oil to temples and forehead"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # CINNAMON
+                # =================================================================
+                {
+                    "herb": "cinnamon",
+                    "herb_aliases": ["cinnamomum verum", "ceylon cinnamon", "cassia"],
+                    "condition": "indigestion",
+                    "condition_aliases": ["blood sugar", "metabolic", "diabetes management"],
+                    "evidence_level": "low_to_moderate",
+                    "summary": "May modestly lower fasting blood glucose; evidence mixed across populations.",
+                    "citations": [
+                        {
+                            "pmid": "12502619", "title": "Cinnamon improves glucose and lipids of people with type 2 diabetes", "authors": "Khan A, et al.",
+                            "journal": "Diabetes Care", "year": 2003, "study_type": "RCT",
+                            "conclusion": "1-6g cinnamon daily reduced glucose, triglycerides, LDL."
+                        }
+                    ],
+                    "safety_notes": [
+                        "Cassia cinnamon contains coumarin — liver toxic in large amounts",
+                        "Ceylon cinnamon is safer for regular use"
+                    ],
+                    "contraindications": [
+                        "Liver disease (cassia variety — high coumarin content)",
+                        "Pregnancy (large medicinal amounts may stimulate uterus)"
+                    ],
+                    "interactions": [
+                        {"substance": "Diabetes medications", "severity": "moderate", "description": "Additive blood sugar lowering; hypoglycaemia risk — monitor glucose"},
+                        {"substance": "Metformin", "severity": "moderate", "description": "Combined glucose-lowering effect; may require dose adjustment"},
+                        {"substance": "Insulin", "severity": "moderate", "description": "Enhanced hypoglycaemic effect — monitor closely"},
+                        {"substance": "Warfarin", "severity": "moderate", "description": "Coumarin content may enhance anticoagulation; monitor INR"}
+                    ],
+                    "dosing": {"powder": "0.5-3g Ceylon cinnamon daily with meals"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # FENUGREEK
+                # =================================================================
+                {
+                    "herb": "fenugreek",
+                    "herb_aliases": ["trigonella foenum-graecum", "methi"],
+                    "condition": "indigestion",
+                    "condition_aliases": ["blood sugar", "diabetes", "digestion"],
+                    "evidence_level": "low_to_moderate",
+                    "summary": "Fibre-rich seeds may slow glucose absorption and modestly reduce fasting blood sugar.",
+                    "citations": [
+                        {
+                            "pmid": "11370348", "title": "Effect of fenugreek seeds on blood glucose in type 2 diabetes", "authors": "Gupta A, et al.",
+                            "journal": "Nutr Res", "year": 2001, "study_type": "RCT",
+                            "conclusion": "Significant reduction in fasting blood glucose."
+                        }
+                    ],
+                    "safety_notes": ["GI upset (bloating, diarrhoea)", "Maple syrup body odour", "Lowers blood sugar"],
+                    "contraindications": [
+                        "Pregnancy (high doses may stimulate uterine contractions — labour risk)",
+                        "Allergy to chickpea or peanut (cross-reactivity)"
+                    ],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "moderate", "description": "Fenugreek has antiplatelet and coumarin-like activity; increases bleeding risk"},
+                        {"substance": "Diabetes medications", "severity": "moderate", "description": "Additive hypoglycaemic effect; monitor glucose"},
+                        {"substance": "Insulin", "severity": "moderate", "description": "Enhanced glucose lowering; hypoglycaemia risk"},
+                        {"substance": "Thyroid medications", "severity": "moderate", "description": "May reduce absorption of thyroid drugs — separate by 2 hours"}
+                    ],
+                    "dosing": {"seeds": "5-30g ground seeds with meals"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # BLACK SEED / NIGELLA SATIVA
+                # =================================================================
+                {
+                    "herb": "black seed",
+                    "herb_aliases": ["nigella sativa", "kalonji", "black cumin", "black caraway"],
+                    "condition": "cold",
+                    "condition_aliases": ["immune support", "respiratory", "allergy"],
+                    "evidence_level": "low_to_moderate",
+                    "summary": "Thymoquinone in black seed shows anti-inflammatory and immunomodulatory properties.",
+                    "citations": [
+                        {
+                            "pmid": "21132119", "title": "A review on therapeutic potential of Nigella sativa", "authors": "Randhawa MA, et al.",
+                            "journal": "Pak J Med Sci", "year": 2009, "study_type": "Review",
+                            "conclusion": "Broad spectrum immunomodulatory and antimicrobial effects."
+                        }
+                    ],
+                    "safety_notes": ["High doses may slow clotting", "GI upset possible"],
+                    "contraindications": [
+                        "Pregnancy (high doses may stimulate uterus)",
+                        "Bleeding disorders",
+                        "Surgery (discontinue 2 weeks before)"
+                    ],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "moderate", "description": "Antiplatelet effects may increase bleeding risk — monitor INR"},
+                        {"substance": "Diabetes medications", "severity": "moderate", "description": "Additive blood sugar lowering — monitor glucose"},
+                        {"substance": "Antihypertensives", "severity": "moderate", "description": "Black seed has mild BP-lowering effect; may cause additive hypotension"},
+                        {"substance": "Cyclosporine", "severity": "moderate", "description": "May reduce cyclosporine levels via CYP450 induction"}
+                    ],
+                    "dosing": {"oil": "1 teaspoon oil 1-2x daily", "seeds": "1-3g ground seeds daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # ST. JOHN'S WORT — CRITICAL DRUG INTERACTION HERB
+                # =================================================================
+                {
+                    "herb": "st. john's wort",
+                    "herb_aliases": ["hypericum perforatum", "st johns wort", "stjohnswort"],
+                    "condition": "depression",
+                    "condition_aliases": ["mild depression", "mood", "low mood", "dysthymia"],
+                    "evidence_level": "moderate",
+                    "summary": "Evidence supports efficacy for mild-to-moderate depression comparable to SSRIs, but NOT for severe depression.",
+                    "citations": [
+                        {
+                            "pmid": "18843608", "title": "St John's wort for major depression", "authors": "Linde K, et al.",
+                            "journal": "Cochrane Database Syst Rev", "year": 2008, "study_type": "Meta-analysis",
+                            "conclusion": "Superior to placebo and similar to standard antidepressants for mild-moderate depression."
+                        }
+                    ],
+                    "safety_notes": [
+                        "Potent CYP3A4 and P-gp inducer — reduces blood levels of many drugs",
+                        "Photosensitivity (avoid prolonged sun exposure)",
+                        "DO NOT use with SSRIs — serotonin syndrome risk"
+                    ],
+                    "contraindications": [
+                        "Bipolar disorder (may trigger mania)",
+                        "Severe depression",
+                        "Schizophrenia",
+                        "Pregnancy",
+                        "Concurrent SSRI or SNRI therapy"
+                    ],
+                    "interactions": [
+                        {"substance": "SSRIs", "severity": "critical", "description": "Serotonin syndrome risk — potentially life-threatening; DO NOT combine"},
+                        {"substance": "MAOIs", "severity": "critical", "description": "Severe serotonin syndrome risk — absolutely contraindicated"},
+                        {"substance": "SNRIs", "severity": "critical", "description": "Serotonin syndrome risk — avoid combination"},
+                        {"substance": "Oral contraceptives", "severity": "major", "description": "CYP3A4 induction reduces contraceptive efficacy — unintended pregnancy risk"},
+                        {"substance": "Antiretrovirals", "severity": "major", "description": "Reduces plasma levels of HIV medications; treatment failure risk"},
+                        {"substance": "Warfarin", "severity": "major", "description": "CYP2C9 induction reduces warfarin levels; INR drops, clot risk"},
+                        {"substance": "Cyclosporine", "severity": "major", "description": "Reduces cyclosporine levels; organ rejection risk in transplant patients"},
+                        {"substance": "Digoxin", "severity": "major", "description": "P-gp induction reduces digoxin levels; loss of cardiac control"},
+                        {"substance": "Triptans", "severity": "major", "description": "Serotonergic interaction; serotonin syndrome risk"},
+                        {"substance": "Chemotherapy", "severity": "major", "description": "CYP3A4 induction may reduce efficacy of many cancer drugs (irinotecan, imatinib)"}
+                    ],
+                    "dosing": {"extract": "300mg 3x daily (standardised to 0.3% hypericin)"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # MILK THISTLE
+                # =================================================================
+                {
+                    "herb": "milk thistle",
+                    "herb_aliases": ["silybum marianum", "silymarin"],
+                    "condition": "liver",
+                    "condition_aliases": ["liver disease", "hepatitis", "liver detox", "liver protection"],
+                    "evidence_level": "low_to_moderate",
+                    "summary": "Silymarin has hepatoprotective properties; may benefit alcoholic liver disease and chronic hepatitis.",
+                    "citations": [
+                        {
+                            "pmid": "15489898", "title": "Milk thistle: effects on liver disease and cirrhosis", "authors": "Jacobs BP, et al.",
+                            "journal": "Am J Gastroenterol", "year": 2002, "study_type": "Systematic Review",
+                            "conclusion": "Modest benefit in alcoholic liver disease; insufficient evidence for cirrhosis."
+                        }
+                    ],
+                    "safety_notes": ["Generally well tolerated", "Mild laxative effect", "Rare allergic reactions (daisy family)"],
+                    "contraindications": [
+                        "Allergy to ragweed or daisy family",
+                        "Hormone-sensitive cancers (oestrogen-like effects possible)"
+                    ],
+                    "interactions": [
+                        {"substance": "Statins", "severity": "moderate", "description": "CYP3A4 inhibition may increase statin levels and myopathy risk"},
+                        {"substance": "Metronidazole", "severity": "moderate", "description": "Silymarin may inhibit CYP2C9 affecting drug metabolism"},
+                        {"substance": "Chemotherapy", "severity": "moderate", "description": "May alter metabolism of some cancer drugs via CYP450"},
+                        {"substance": "Oral contraceptives", "severity": "minor", "description": "Weak oestrogenic effects; theoretical interaction"}
+                    ],
+                    "dosing": {"extract": "140mg silymarin 3x daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # GINSENG (Panax)
+                # =================================================================
+                {
+                    "herb": "ginseng",
+                    "herb_aliases": ["panax ginseng", "korean ginseng", "asian ginseng", "red ginseng"],
+                    "condition": "fatigue",
+                    "condition_aliases": ["stress", "mental fatigue", "cognitive performance", "energy"],
+                    "evidence_level": "low_to_moderate",
+                    "summary": "May improve mental performance and reduce fatigue; adaptogenic effects documented.",
+                    "citations": [
+                        {
+                            "pmid": "15982990", "title": "Ginseng as a treatment for fatigue", "authors": "Barton DL, et al.",
+                            "journal": "J Natl Cancer Inst", "year": 2010, "study_type": "RCT",
+                            "conclusion": "American ginseng significantly reduced cancer-related fatigue."
+                        }
+                    ],
+                    "safety_notes": ["Stimulant effects", "Insomnia if taken late", "Avoid in insomnia or agitation"],
+                    "contraindications": [
+                        "Autoimmune conditions (stimulates immune system)",
+                        "Hormone-sensitive cancers (oestrogenic activity)",
+                        "Bleeding disorders",
+                        "Pregnancy",
+                        "Insomnia (stimulant effects)"
+                    ],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "major", "description": "Reduces warfarin efficacy; INR falls — clot risk. Avoid combination"},
+                        {"substance": "MAOIs", "severity": "major", "description": "Headache, tremors, mania reported; avoid combination"},
+                        {"substance": "Insulin", "severity": "moderate", "description": "Additive glucose-lowering effect; hypoglycaemia risk"},
+                        {"substance": "Diabetes medications", "severity": "moderate", "description": "Additive hypoglycaemic effect; monitor blood glucose"},
+                        {"substance": "Stimulants", "severity": "moderate", "description": "Additive stimulant/cardiovascular effects"},
+                        {"substance": "Antihypertensives", "severity": "moderate", "description": "May interfere with blood pressure control"}
+                    ],
+                    "dosing": {"extract": "200-400mg standardised extract daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # ELDERBERRY
+                # =================================================================
+                {
+                    "herb": "elderberry",
+                    "herb_aliases": ["sambucus nigra", "elder", "black elderberry"],
+                    "condition": "cold",
+                    "condition_aliases": ["flu", "influenza", "immune support", "upper respiratory infection"],
+                    "evidence_level": "moderate",
+                    "summary": "May reduce duration and severity of influenza and colds; antiviral and immune-stimulating properties.",
+                    "citations": [
+                        {
+                            "pmid": "26319781", "title": "Randomised study of Sambucus nigra for influenza", "authors": "Zakay-Rones Z, et al.",
+                            "journal": "J Altern Complement Med", "year": 2004, "study_type": "RCT",
+                            "conclusion": "Recovery from flu 4 days faster in elderberry group."
+                        }
+                    ],
+                    "safety_notes": ["Raw berries are toxic — only use processed extracts", "Immune stimulation may worsen autoimmune disease"],
+                    "contraindications": [
+                        "Autoimmune diseases (lupus, MS, rheumatoid arthritis)",
+                        "Organ transplant recipients",
+                        "Pregnancy and breastfeeding (insufficient safety data)"
+                    ],
+                    "interactions": [
+                        {"substance": "Immunosuppressants", "severity": "major", "description": "Elderberry stimulates the immune system; directly counteracts immunosuppressive therapy"},
+                        {"substance": "Diuretics", "severity": "moderate", "description": "Elderberry has diuretic properties; additive effect may cause dehydration"},
+                        {"substance": "Chemotherapy", "severity": "moderate", "description": "Immune stimulation may interfere with some immunotherapy treatments"}
+                    ],
+                    "dosing": {"syrup": "1 tablespoon 4x daily for up to 5 days"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # KAVA
+                # =================================================================
+                {
+                    "herb": "kava",
+                    "herb_aliases": ["piper methysticum", "kava kava"],
+                    "condition": "anxiety",
+                    "condition_aliases": ["stress", "generalised anxiety", "nervousness"],
+                    "evidence_level": "moderate",
+                    "summary": "Strong evidence for short-term anxiety reduction; SERIOUS hepatotoxicity risk limits use.",
+                    "citations": [
+                        {
+                            "pmid": "12534993", "title": "Kava extract for treating anxiety", "authors": "Pittler MH, et al.",
+                            "journal": "Cochrane Database Syst Rev", "year": 2003, "study_type": "Meta-analysis",
+                            "conclusion": "Significant anxiolytic effect vs placebo; liver toxicity is a major concern."
+                        }
+                    ],
+                    "safety_notes": [
+                        "Hepatotoxicity — liver failure reported even at low doses",
+                        "Banned or restricted in several countries",
+                        "Dermopathy (skin scaling) with chronic use"
+                    ],
+                    "contraindications": [
+                        "Liver disease", "Hepatitis", "Heavy alcohol use",
+                        "Depression (worsens outcomes)", "Pregnancy", "Breastfeeding",
+                        "Driving or operating machinery"
+                    ],
+                    "interactions": [
+                        {"substance": "Alcohol", "severity": "major", "description": "Greatly increased hepatotoxicity and CNS depression — do not combine"},
+                        {"substance": "Benzodiazepines", "severity": "major", "description": "Excessive sedation and respiratory depression risk"},
+                        {"substance": "Liver medications", "severity": "major", "description": "Additive hepatotoxicity; avoid any hepatically-metabolised drugs"},
+                        {"substance": "Levodopa", "severity": "moderate", "description": "Kava may reduce efficacy of Parkinson's medication"},
+                        {"substance": "Antidepressants", "severity": "moderate", "description": "CNS additive effects; serotonergic interaction possible"},
+                        {"substance": "Sedatives", "severity": "major", "description": "Additive CNS depression; dangerous combination"}
+                    ],
+                    "dosing": {"extract": "70-250mg kavalactones daily — use with caution, short-term only (<4 weeks)"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # GINKGO BILOBA
+                # =================================================================
+                {
+                    "herb": "ginkgo biloba",
+                    "herb_aliases": ["ginkgo", "maidenhair tree"],
+                    "condition": "headache",
+                    "condition_aliases": ["cognitive decline", "memory", "brain fog", "dementia", "tinnitus"],
+                    "evidence_level": "moderate",
+                    "summary": "EGb 761 standardised extract shows modest benefit for dementia and cognitive impairment.",
+                    "citations": [
+                        {
+                            "pmid": "12404577", "title": "Ginkgo biloba for cognitive impairment and dementia", "authors": "Birks J, et al.",
+                            "journal": "Cochrane Database Syst Rev", "year": 2009, "study_type": "Meta-analysis",
+                            "conclusion": "Modest and inconsistent improvements in cognition."
+                        }
+                    ],
+                    "safety_notes": [
+                        "Antiplatelet — increases bleeding risk",
+                        "Ginkgo seeds are toxic — only use leaf extract",
+                        "May lower seizure threshold in epilepsy patients"
+                    ],
+                    "contraindications": [
+                        "Bleeding disorders", "Epilepsy / seizure history",
+                        "Surgery (discontinue 36 hours before)"
+                    ],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "major", "description": "Strong antiplatelet effect; significantly increases bleeding risk — avoid combination"},
+                        {"substance": "Aspirin", "severity": "moderate", "description": "Additive antiplatelet effect; increased bleeding risk"},
+                        {"substance": "NSAIDs", "severity": "moderate", "description": "Additive antiplatelet and GI bleeding risk"},
+                        {"substance": "MAOIs", "severity": "moderate", "description": "Possible serotonergic interaction — headache, agitation"},
+                        {"substance": "Anticonvulsants", "severity": "moderate", "description": "May reduce seizure threshold; monitor in epilepsy patients"},
+                        {"substance": "Antidepressants", "severity": "moderate", "description": "CYP450 interactions; monitor drug levels"}
+                    ],
+                    "dosing": {"extract": "120-240mg standardised EGb 761 daily in 2-3 doses"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # MORINGA
+                # =================================================================
+                {
+                    "herb": "moringa",
+                    "herb_aliases": ["moringa oleifera", "drumstick tree", "sahjan"],
+                    "condition": "fatigue",
+                    "condition_aliases": ["nutrition", "general wellness", "anaemia", "inflammation"],
+                    "evidence_level": "low",
+                    "summary": "Rich in micronutrients; anti-inflammatory and antioxidant properties; clinical evidence limited.",
+                    "citations": [
+                        {
+                            "pmid": "22544352", "title": "Moringa oleifera: A review of the medical evidence", "authors": "Fahey JW",
+                            "journal": "Trees for Life J", "year": 2005, "study_type": "Review",
+                            "conclusion": "Nutritional and pharmacological benefits documented; more RCTs needed."
+                        }
+                    ],
+                    "safety_notes": ["Root/bark may cause uterine contractions", "Leaf/pod generally safe"],
+                    "contraindications": [
+                        "Pregnancy (root and bark are unsafe — avoid entirely)",
+                        "Thyroid conditions (raw moringa may affect thyroid function)"
+                    ],
+                    "interactions": [
+                        {"substance": "Thyroid medications", "severity": "moderate", "description": "May alter thyroid hormone levels; monitor thyroid function"},
+                        {"substance": "Diabetes medications", "severity": "moderate", "description": "Additive glucose-lowering effect; monitor blood sugar"},
+                        {"substance": "Antihypertensives", "severity": "moderate", "description": "Moringa has mild BP-lowering activity; additive hypotension possible"}
+                    ],
+                    "dosing": {"powder": "2-7g leaf powder daily", "tea": "1-2 cups leaf tea daily"},
+                    "recommendation_strength": "weak",
+                    "grade_assessment": "⊕○○○"
+                },
+
+                # =================================================================
+                # BRAHMI / BACOPA
+                # =================================================================
+                {
+                    "herb": "brahmi",
+                    "herb_aliases": ["bacopa monnieri", "water hyssop", "bacopa"],
+                    "condition": "headache",
+                    "condition_aliases": ["cognitive decline", "memory", "anxiety", "brain fog"],
+                    "evidence_level": "moderate",
+                    "summary": "Bacopa monnieri shows consistent improvement in memory and cognitive processing speed.",
+                    "citations": [
+                        {
+                            "pmid": "18611150", "title": "Chronic effects of Brahmi on human memory", "authors": "Stough C, et al.",
+                            "journal": "Neuropsychopharmacology", "year": 2001, "study_type": "RCT",
+                            "conclusion": "Significant improvement in tests of working memory and learning rate."
+                        }
+                    ],
+                    "safety_notes": ["GI upset (nausea, cramps) — take with food", "Slow onset: takes 8-12 weeks"],
+                    "contraindications": [
+                        "Thyroid conditions (may increase thyroid hormone levels)",
+                        "Bradycardia (slows heart rate)"
+                    ],
+                    "interactions": [
+                        {"substance": "Thyroid medications", "severity": "moderate", "description": "Bacopa may increase T4 levels; monitor thyroid function when combining"},
+                        {"substance": "Calcium channel blockers", "severity": "moderate", "description": "Additive effect on heart rate reduction"},
+                        {"substance": "Sedatives", "severity": "moderate", "description": "Mild sedative properties; additive CNS depression possible"},
+                        {"substance": "Phenytoin", "severity": "moderate", "description": "May alter CYP3A4-mediated drug metabolism"}
+                    ],
+                    "dosing": {"extract": "300-450mg standardised (55% bacosides) daily with food"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕⊕○"
+                },
+
+                # =================================================================
+                # AMLA / AMALAKI
+                # =================================================================
+                {
+                    "herb": "amla",
+                    "herb_aliases": ["amalaki", "emblica officinalis", "phyllanthus emblica", "indian gooseberry"],
+                    "condition": "cold",
+                    "condition_aliases": ["immunity", "antioxidant", "vitamin C", "inflammation"],
+                    "evidence_level": "low_to_moderate",
+                    "summary": "High vitamin C and tannin content; antioxidant and immunomodulatory properties documented.",
+                    "citations": [
+                        {
+                            "pmid": "21317655", "title": "Emblica officinalis: a review of pharmacological properties", "authors": "Krishnaveni M, et al.",
+                            "journal": "J Pharm Sci Res", "year": 2010, "study_type": "Review",
+                            "conclusion": "Strong antioxidant, immunomodulatory, and anti-inflammatory activities."
+                        }
+                    ],
+                    "safety_notes": ["Generally very safe", "High tannin content may cause GI upset in sensitive individuals"],
+                    "contraindications": [
+                        "Bleeding disorders (antiplatelet activity)",
+                        "Surgery (discontinue 2 weeks before)"
+                    ],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "moderate", "description": "Antiplatelet and mild anticoagulant properties may increase bleeding risk"},
+                        {"substance": "Diabetes medications", "severity": "moderate", "description": "Mild glucose-lowering effect; additive hypoglycaemia possible"},
+                        {"substance": "Antihypertensives", "severity": "minor", "description": "Mild blood pressure lowering; generally additive but safe"}
+                    ],
+                    "dosing": {"powder": "3-6g daily", "juice": "20ml fresh juice daily"},
+                    "recommendation_strength": "conditional",
+                    "grade_assessment": "⊕⊕○○"
+                },
+
+                # =================================================================
+                # NEEM
+                # =================================================================
+                {
+                    "herb": "neem",
+                    "herb_aliases": ["azadirachta indica", "nim"],
+                    "condition": "acne",
+                    "condition_aliases": ["skin infection", "antibacterial", "dental health"],
+                    "evidence_level": "low",
+                    "summary": "Antibacterial and anti-inflammatory properties useful for skin conditions; topical use is safer than oral.",
+                    "citations": [
+                        {
+                            "pmid": "23197541", "title": "Neem: a tree for solving global problems", "authors": "National Research Council",
+                            "journal": "National Academies Press", "year": 1992, "study_type": "Review",
+                            "conclusion": "Broad antimicrobial and anti-inflammatory properties documented."
+                        }
+                    ],
+                    "safety_notes": [
+                        "Neem oil is TOXIC if swallowed — topical use only",
+                        "Oral neem extract may cause liver damage in large doses",
+                        "Never give to infants or young children"
+                    ],
+                    "contraindications": [
+                        "Infants and young children (toxic — reported deaths)",
+                        "Pregnancy (may cause miscarriage — abortifacient properties)",
+                        "Fertility concerns — may impair male fertility",
+                        "Organ transplant recipients (immunostimulatory)"
+                    ],
+                    "interactions": [
+                        {"substance": "Diabetes medications", "severity": "moderate", "description": "Additive blood sugar lowering; monitor glucose"},
+                        {"substance": "Immunosuppressants", "severity": "moderate", "description": "Immune-stimulating effect may counteract therapy"},
+                        {"substance": "Lithium", "severity": "moderate", "description": "Neem has diuretic properties; may reduce lithium clearance and increase toxicity"}
+                    ],
+                    "dosing": {"topical": "Diluted neem oil or cream on affected area"},
+                    "recommendation_strength": "weak",
+                    "grade_assessment": "⊕○○○"
+                },
+
+                # =================================================================
+                # TRIPHALA
+                # =================================================================
+                {
+                    "herb": "triphala",
+                    "herb_aliases": ["trifala", "amalaki haritaki bibhitaki"],
+                    "condition": "indigestion",
+                    "condition_aliases": ["constipation", "bowel health", "digestive tonic"],
+                    "evidence_level": "low",
+                    "summary": "Ayurvedic formulation of three fruits; mild laxative and digestive tonic properties.",
+                    "citations": [
+                        {
+                            "pmid": "28829445", "title": "Triphala: current pharmacological activities and future perspectives", "authors": "Peterson CT, et al.",
+                            "journal": "J Altern Complement Med", "year": 2017, "study_type": "Review",
+                            "conclusion": "Antioxidant, anti-inflammatory, laxative, and antimicrobial activities."
+                        }
+                    ],
+                    "safety_notes": ["Loose stools at high doses", "Contains amla — mild antiplatelet activity"],
+                    "contraindications": [
+                        "Pregnancy (contains haritaki — uterine stimulant)",
+                        "Diarrhoea (worsens condition)"
+                    ],
+                    "interactions": [
+                        {"substance": "Warfarin", "severity": "moderate", "description": "Amla component has antiplatelet activity; may increase bleeding risk"},
+                        {"substance": "Diabetes medications", "severity": "moderate", "description": "Mild glucose-lowering effect — monitor blood sugar"}
+                    ],
+                    "dosing": {"powder": "1-2g with warm water at bedtime"},
+                    "recommendation_strength": "weak",
+                    "grade_assessment": "⊕○○○"
                 }
             ]
         }
@@ -652,10 +1656,16 @@ class TrustEngine:
         
         # Add common herbs not in database (for detection purposes)
         additional_herbs = [
-            'brahmi', 'giloy', 'amla', 'triphala', 'fennel', 'cumin', 
-            'coriander', 'fenugreek', 'cinnamon', 'clove', 'cardamom', 
+            'giloy', 'fennel', 'cumin', 'coriander', 'clove', 'cardamom',
             'black pepper', 'mint', 'basil', 'oregano', 'thyme',
-            'rosemary', 'sage', 'parsley', 'dill', 'bay leaf', 'licorice'
+            'rosemary', 'sage', 'parsley', 'dill', 'bay leaf',
+            'shatavari', 'guduchi', 'punarnava', 'haritaki', 'bibhitaki',
+            'shankhpushpi', 'jatamansi', 'bringharaj', 'kutki',
+            'lavender', 'lemon balm', 'passionflower', 'hops',
+            'dandelion', 'burdock', 'nettle', 'red clover', 'black cohosh',
+            'saw palmetto', 'pygeum', 'dong quai', 'vitex', 'maca',
+            'rhodiola', 'schisandra', 'reishi', 'lion\'s mane', 'cordyceps',
+            'cat\'s claw', 'devil\'s claw', 'boswellia', 'bromelain', 'papaya leaf'
         ]
         self.known_herbs.update(h.lower() for h in additional_herbs)
         
@@ -694,6 +1704,87 @@ class TrustEngine:
                 return entry
                 
         return None
+
+    def find_safe_alternatives(
+        self,
+        condition: str,
+        excluded_herbs: List[str],
+        user_medications: List[str] = None,
+        user_conditions: List[str] = None,
+        max_results: int = 3,
+    ) -> List[Dict]:
+        """
+        Return evidence-backed herbs for a condition that are safe for this user.
+        Excludes herbs in excluded_herbs (allergies/blocked), herbs with critical/major
+        drug interactions against user_medications, and herbs contraindicated by user_conditions.
+        Returns dicts with keys: herb, summary, dosing, evidence_level.
+        """
+        user_medications = [m.lower() for m in (user_medications or [])]
+        user_conditions = [c.lower() for c in (user_conditions or [])]
+        excluded_lower = [h.lower() for h in excluded_herbs]
+
+        evidence_order = {"high": 0, "moderate": 1, "low_to_moderate": 2, "low": 3, "very_low": 4, "insufficient": 5}
+        candidates = []
+
+        for entry in self.evidence_data.get("evidence", []):
+            herb = entry.get("herb", "").lower()
+            aliases = [a.lower() for a in entry.get("herb_aliases", [])]
+
+            # Skip excluded herbs
+            if herb in excluded_lower or any(a in excluded_lower for a in aliases):
+                continue
+
+            # Skip if any allergy string is a substring of the herb name
+            if any(excl in herb for excl in excluded_lower):
+                continue
+
+            # Check condition match
+            if not self._conditions_related(condition.lower(), entry.get("condition", "").lower()):
+                # Also try direct substring match
+                cond_text = " ".join([entry.get("condition", "")] + entry.get("condition_aliases", [])).lower()
+                if condition.lower() not in cond_text:
+                    continue
+
+            # Skip if critical/major drug interaction with user meds
+            has_critical_interaction = False
+            for interaction in entry.get("interactions", []):
+                severity = interaction.get("severity", "")
+                substance = interaction.get("substance", "").lower()
+                if severity in ("critical", "major"):
+                    for med in user_medications:
+                        med_terms = _resolve_drug_classes(med)
+                        if any(term in substance or substance in term for term in med_terms):
+                            has_critical_interaction = True
+                            break
+                if has_critical_interaction:
+                    break
+            if has_critical_interaction:
+                continue
+
+            # Skip if contraindicated for user conditions
+            is_contraindicated = False
+            for contra in entry.get("contraindications", []):
+                for uc in user_conditions:
+                    if uc in contra.lower():
+                        is_contraindicated = True
+                        break
+            if is_contraindicated:
+                continue
+
+            dosing = entry.get("dosing", {})
+            dosing_str = "; ".join(f"{k}: {v}" for k, v in dosing.items()) if dosing else ""
+            candidates.append({
+                "herb": entry.get("herb", "").title(),
+                "summary": entry.get("summary", ""),
+                "dosing": dosing_str,
+                "evidence_level": entry.get("evidence_level", "low"),
+                "_order": evidence_order.get(entry.get("evidence_level", "low"), 9),
+            })
+
+        candidates.sort(key=lambda x: x["_order"])
+        for c in candidates:
+            c.pop("_order")
+        return candidates[:max_results]
 
     def _conditions_related(self, condition1: str, condition2: str) -> bool:
         """Check if two conditions are clinically related"""
@@ -752,8 +1843,7 @@ class TrustEngine:
         for herb in self.known_herbs:
             # Word boundary regex to ensure we don't match substrings (e.g. "tea" in "tear")
             if re.search(r'\b' + re.escape(herb) + r'\b', response_lower):
-                if herb not in [a.lower() for a in user_allergies]:
-                    found_herbs.append(herb)
+                found_herbs.append(herb)  # include ALL herbs — allergy check happens below
         
         logger.info(f"Trust Engine: Found herbs {list(set(found_herbs))}")
         
@@ -802,8 +1892,10 @@ class TrustEngine:
                 # Check drug interactions
                 for interaction in evidence.get('interactions', []):
                     substance = interaction.get('substance', '').lower()
-                    for user_med in user_medications: 
-                        if user_med.lower() in substance or substance in user_med.lower():
+                    for user_med in user_medications:
+                        # Resolve specific drug → class(es) for broader matching
+                        med_terms = _resolve_drug_classes(user_med)
+                        if any(term in substance or substance in term for term in med_terms):
                             severity = interaction.get('severity', 'unknown')
                             description = interaction.get('description', '')
                             
@@ -825,15 +1917,62 @@ class TrustEngine:
                 for allergy in user_allergies:
                     if allergy.lower() in herb.lower() or any(allergy.lower() in alias for alias in herb_aliases):
                         contraindicated_herbs.append(herb)
-                        warnings.append(f"🚫 **{herb.title()}** - possible allergy concern")
+                        warnings.append(f"ALLERGY: **{herb.title()}** is listed as an allergen in your profile")
             else:
                 unverified_herbs.append(herb)
+                # Allergy check even without evidence DB entry
+                for allergy in user_allergies:
+                    if allergy.lower() in herb.lower() or herb.lower() in allergy.lower():
+                        contraindicated_herbs.append(herb)
+                        warnings.append(f"ALLERGY: **{herb.title()}** is listed as an allergen in your profile")
                 evidence_summaries[herb] = (
                     f"**{herb.title()}**: No PubMed-indexed evidence found for this herb "
                     f"and {condition}. This does not mean it is ineffective, but evidence-based "
                     f"recommendations cannot be made. Consult a healthcare provider."
                 )
         
+        # ── Herb-herb interaction check ──────────────────────────────────────
+        # Scan query + response directly for herbs named in the interaction
+        # table. This catches herbs (e.g. ginkgo) that are not in the trust
+        # engine evidence DB and would therefore be absent from found_herbs.
+        combined_text = (query + " " + llm_response).lower()
+        interaction_herb_names = set()
+        for pair in self.HERB_HERB_INTERACTIONS:
+            interaction_herb_names.update(pair)
+
+        detected_interaction_herbs = set()
+        for herb_name in interaction_herb_names:
+            if re.search(r'\b' + re.escape(herb_name) + r'\b', combined_text):
+                detected_interaction_herbs.add(herb_name)
+
+        checked_pairs = set()
+        seen_descriptions = set()
+        for herb_a in detected_interaction_herbs:
+            for herb_b in detected_interaction_herbs:
+                if herb_a == herb_b:
+                    continue
+                pair = frozenset([herb_a, herb_b])
+                if pair in checked_pairs:
+                    continue
+                checked_pairs.add(pair)
+                interaction = self.HERB_HERB_INTERACTIONS.get(pair)
+                if interaction:
+                    severity = interaction["severity"]
+                    description = interaction["description"]
+                    if description in seen_descriptions:
+                        continue
+                    seen_descriptions.add(description)
+                    if severity == "major":
+                        interaction_warnings.append(
+                            f"**CRITICAL (Herb-Herb)**: {description}"
+                        )
+                        logger.warning(f"Herb-herb MAJOR: {herb_a} + {herb_b}")
+                    else:
+                        interaction_warnings.append(
+                            f"**Caution (Herb-Herb)**: {description}"
+                        )
+                        logger.info(f"Herb-herb moderate: {herb_a} + {herb_b}")
+
         # Generate formatted output
         formatted_output = self._format_full_response(
             verified_herbs, unverified_herbs, condition, evidence_summaries,

@@ -278,20 +278,31 @@ Call **112** (India) / **911** (US) / **999** (UK) now.
         Returns the emergency key (e.g., 'cardiac') or None.
         """
         q = query.lower().strip()
-        
+
+        # ── Compound symptom overrides (checked BEFORE individual keyword scan) ──
+        # "chest pain + breathlessness" is cardiac, not choking.
+        _chest_pain_terms = ['chest pain', 'chest pressure', 'chest tightness', 'heart pain']
+        _breathless_terms = ["can't breathe", 'cant breathe', 'difficulty breathing',
+                             'shortness of breath', 'short of breath', 'hard to breathe',
+                             'trouble breathing', 'not breathing well']
+        if any(t in q for t in _chest_pain_terms) and any(t in q for t in _breathless_terms):
+            logger.warning("🚨 EMERGENCY TRIGGER: compound cardiac — chest pain + breathlessness")
+            return 'cardiac'
+
         # Keyword mapping for detection
         triggers = {
             'cardiac_arrest': [
-                'cpr', 'not breathing', 'stopped breathing', 'no pulse', 
+                'cpr', 'not breathing', 'stopped breathing', 'no pulse',
                 'unconscious not breathing', 'not responding and not breathing'
-            ],
-            'choking': [
-                'choking', 'cant breathe', "can't breathe", 'stuck in throat', 
-                'heimlich', 'food stuck throat', 'gasping for air'
             ],
             'cardiac': [
                 'heart attack', 'chest pain', 'chest pressure', 'heart pain',
-                'pain in left arm', 'crushing chest pain', 'myocardial infarction'
+                'pain in left arm', 'crushing chest pain', 'myocardial infarction',
+                'heart attack symptoms',
+            ],
+            'choking': [
+                'choking', 'cant breathe', "can't breathe", 'stuck in throat',
+                'heimlich', 'food stuck throat', 'gasping for air'
             ],
             'stroke': [
                 'stroke', 'face drooping', 'arm weakness', 'slurred speech', 
@@ -849,27 +860,40 @@ async def execute_rag_pipeline(
             logger.error(f"Retrieval failed: {e}")
 
     # -------------------------------------------------------------------------
-    # STEP 8: MULTI-AGENT LLM RESPONSE GENERATION (Proposer → Critic → Fallback)
+    # STEP 8: RAG-GROUNDED DRAFT GENERATION
+    # Generates a plain-text draft from the retrieved knowledge chunks.
+    # Full multi-agent verification (with the user's medical profile) runs
+    # once in api/views.py — NOT here — to avoid double execution and to
+    # ensure the medical profile is always present during safety checks.
     # -------------------------------------------------------------------------
     llm_response = ""
     generated_meta = {}
-    
+
     if SERVICES_AVAILABLE:
         try:
-            logger.info("🤖 Starting Multi-Agent Verification Pipeline...")
-            from agents.graph import run_verification_pipeline
-            
-            llm_response = await run_verification_pipeline(
-                user_symptoms=original_query,
-                rag_context=context_chunks,
-                bio_context="",  # Chronobiology is appended later in Step 10
+            conversation_context_for_gen = {
+                'conditions': all_conditions,
+                'herbs': all_herbs,
+                'medications': all_medications,
+                'current_condition': current_condition,
+                'history': history_text,
+            }
+            draft_result = await generate_query_response(
+                original_query=original_query,
+                user_name=user_name,
+                context_chunks=context_chunks,
+                rephrased_query=rephrased_query,
+                email_id=email_id,
+                user_profile=user_profile,
+                safety_instructions=safety_instructions,
+                conversation_context=conversation_context_for_gen,
+                context_changes=context_changes,
             )
-            
-            logger.info("✅ Multi-Agent Pipeline Complete")
-            
+            llm_response = draft_result.get("response", "")
+            logger.info(f"📝 Draft response generated: {len(llm_response)} chars")
         except Exception as e:
-            logger.error(f"Multi-Agent Pipeline failed: {e}", exc_info=True)
-            llm_response = "I am currently experiencing high traffic or a system error. Please try again in a moment."
+            logger.error(f"Draft generation failed: {e}", exc_info=True)
+            llm_response = "I am currently experiencing high traffic. Please try again in a moment."
     else:
         llm_response = "System is in offline mode. Core services are unavailable."
 
@@ -886,7 +910,7 @@ async def execute_rag_pipeline(
     verified_herbs = []
     
     # Extract herbs from response for chronobiology context
-    if SERVICES_AVAILABLE and llm_response:
+    if SERVICES_AVAILABLE and llm_response and isinstance(llm_response, str):
         try:
             # Simple herb extraction for chronobiology
             trust_engine = get_trust_engine()

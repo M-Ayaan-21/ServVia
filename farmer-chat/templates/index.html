@@ -1329,19 +1329,29 @@
       if (sender === "bot") {
         cd.innerHTML = marked.parse(message);
         // Agent flow indicator
-        const af = document.createElement("div"); af.className = "agent-flow";
-        af.innerHTML = '<span class="node proposer"><i class="fas fa-pen"></i> Proposer</span><span class="arrow">&rarr;</span><span class="node critic"><i class="fas fa-search"></i> Critic</span><span class="arrow">&rarr;</span><span class="node approved"><i class="fas fa-check"></i> Approved</span>';
-        cd.appendChild(af);
+        if (pipelineData && pipelineData.is_emergency_block) {
+          const af = document.createElement("div"); af.className = "agent-flow";
+          af.innerHTML = '<span class="node proposer"><i class="fas fa-pen"></i> Proposer</span><span class="arrow">&rarr;</span><span class="node critic"><i class="fas fa-search"></i> Critic</span><span class="arrow">&rarr;</span><span class="node fallback" style="background:rgba(239,68,68,0.12);color:#ef4444;"><i class="fas fa-times-circle"></i> Blocked by Critic</span>';
+          cd.appendChild(af);
+        } else {
+          const af = document.createElement("div"); af.className = "agent-flow";
+          af.innerHTML = '<span class="node proposer"><i class="fas fa-pen"></i> Proposer</span><span class="arrow">&rarr;</span><span class="node critic"><i class="fas fa-search"></i> Critic</span><span class="arrow">&rarr;</span><span class="node approved"><i class="fas fa-check"></i> Approved</span>';
+          cd.appendChild(af);
+        }
 
         if (pipelineData) {
           const meta = document.createElement("div"); meta.className = "pipeline-meta";
-          const p = pipelineData.pipeline || '';
-          if (p === 'safe_response') meta.innerHTML += '<span class="pipeline-badge safe"><i class="fas fa-shield-alt"></i> Verified Safe</span>';
-          else if (p === 'emergency_intercept') meta.innerHTML += '<span class="pipeline-badge emergency"><i class="fas fa-exclamation-triangle"></i> Emergency Protocol</span>';
-          else if (p === 'safety_blocked') meta.innerHTML += '<span class="pipeline-badge blocked"><i class="fas fa-ban"></i> Safety Blocked</span>';
+          if (pipelineData.is_emergency_block) {
+            meta.innerHTML += '<span class="pipeline-badge emergency"><i class="fas fa-exclamation-triangle"></i> Triage Alert - Medical Evaluation Required</span>';
+          } else {
+            const p = pipelineData.pipeline || '';
+            if (p === 'safe_response') meta.innerHTML += '<span class="pipeline-badge safe"><i class="fas fa-shield-alt"></i> Verified Safe</span>';
+            else if (p === 'emergency_intercept') meta.innerHTML += '<span class="pipeline-badge emergency"><i class="fas fa-exclamation-triangle"></i> Emergency Protocol</span>';
+            else if (p === 'safety_blocked') meta.innerHTML += '<span class="pipeline-badge blocked"><i class="fas fa-ban"></i> Safety Blocked</span>';
+          }
           cd.appendChild(meta);
 
-          if (pipelineData.trust_verification) {
+          if (pipelineData.trust_verification && pipelineData.has_remedies !== false && (pipelineData.trust_verification.verified_count > 0 || pipelineData.trust_verification.unverified_count > 0 || (pipelineData.trust_verification.interaction_warnings && pipelineData.trust_verification.interaction_warnings.length > 0))) {
             const tv = pipelineData.trust_verification, td = document.createElement("div"); td.className = "trust-summary-card";
             let h = `<div class="trust-header"><span class="trust-icon"><i class="fas fa-microscope" style="color:#14b8a6"></i></span><span class="trust-title">Scientific Validation</span></div><div class="trust-counts">`;
             if (tv.verified_count > 0) h += `<span class="trust-count-badge verified"><i class="fas fa-check-circle"></i> ${tv.verified_count} Verified</span>`;
